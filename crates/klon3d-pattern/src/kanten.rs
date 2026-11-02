@@ -177,9 +177,11 @@ impl Auswertung<'_> {
         };
 
         let mut punktknoten = Vec::new();
+        let mut eigene: Vec<Pt> = Vec::new();
         for (k, stelle) in knoten.iter().zip(&marken) {
             let (true, Some(stelle)) = (k.ist_punkt, *stelle) else { continue };
             let roh = &items[k.knoten_nr];
+            eigene.push(k.punkte[0]);
             punktknoten.push(Punktknoten {
                 name: self.punkt_name(&k.ref_id).unwrap_or(&k.ref_id).to_string(),
                 id: k.ref_id.clone(),
@@ -190,6 +192,21 @@ impl Auswertung<'_> {
                 stelle,
             });
         }
+        // A point node inside a loop that the seam line lost
+        // ([`crate::schleifen`]) has been moved to the point that replaced
+        // the loop, where another node already sits. It bounds no edge any
+        // more and is dropped, instead of leaving edges of length zero.
+        let tol = crate::kontur::toleranz(self);
+        let geteilt = |s: usize| punktknoten.iter().filter(|p| p.stelle == s).count() > 1;
+        let weg: Vec<bool> = punktknoten
+            .iter()
+            .zip(&eigene)
+            .map(|(p, e)| e.dist(umriss[p.stelle]) > tol && geteilt(p.stelle))
+            .collect();
+        if weg.iter().any(|&w| w) && weg.iter().any(|&w| !w) {
+            let mut w = weg.iter();
+            punktknoten.retain(|_| !*w.next().unwrap());
+        }
 
         let n = punktknoten.len();
         let mut kanten = Vec::with_capacity(n);
@@ -198,7 +215,10 @@ impl Auswertung<'_> {
             let (a, b) = (punktknoten[i].stelle, punktknoten[j].stelle);
             // Die letzte Kante (und bei einem einzigen Punktknoten die
             // einzige) läuft über das Ende des Umrisses zurück an den Anfang.
-            let roh: Vec<Pt> = if j > i {
+            // A node whose point fell together with the first point of the
+            // ring ([`crate::schleifen`]) stands at index 0 at the end of the
+            // ring, so the order of the indices decides, not of the nodes.
+            let roh: Vec<Pt> = if a < b || (a == b && n > 1) {
                 umriss[a..=b].to_vec()
             } else {
                 umriss[a..].iter().chain(&umriss[..=b]).copied().collect()

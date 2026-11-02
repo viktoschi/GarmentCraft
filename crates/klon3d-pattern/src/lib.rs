@@ -33,6 +33,7 @@ pub mod kanten;
 pub mod kontur;
 pub mod kurven;
 pub mod lagevorschlag;
+pub mod schleifen;
 pub mod schneiden;
 pub mod model;
 pub mod operationen;

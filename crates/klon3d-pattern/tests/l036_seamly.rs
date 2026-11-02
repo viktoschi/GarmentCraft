@@ -69,10 +69,10 @@ fn points_as_in_seamly2d() {
     }
 }
 
-/// Seam line per piece as in Seamly2D's export. "L036 - back" is left out:
-/// its centre back runs down to the hem, up past the zip end and back down,
-/// and Seamly2D removes that overlap from the seam line (`CheckLoops`;
-/// 2294.16 mm against 2727.4 here). klon3d does not remove loops yet.
+/// Seam line per piece as in Seamly2D's export. The centre back of
+/// "L036 - back" runs from the hem up past the zip end and back down to it;
+/// Seamly2D cuts that loop out of the seam line (`CheckLoops`, see
+/// `schleifen.rs`), 2294.16 mm instead of 2727.4.
 #[test]
 fn seam_lines_as_in_seamly2d() {
     let Some(pfad) = muster() else { return };
@@ -80,6 +80,7 @@ fn seam_lines_as_in_seamly2d() {
     let ev = Auswertung::lade(&m, &masse()).unwrap();
     let soll = [
         ("6 panel + fillet - fillet", 283.43),
+        ("L036 - back", 2294.16),
         ("L036 - back side", 2192.33),
         ("L036 - front", 2340.23),
         ("L036 - front side real", 2019.00),
@@ -89,7 +90,7 @@ fn seam_lines_as_in_seamly2d() {
         let rand = ev.teilrand(t, Kurvenquelle::Seamly).unwrap();
         let Some(&(_, mm)) = soll.iter().find(|(n, _)| *n == rand.teil) else { continue };
         let ist = rand.in_cm(rand.umfang()) * 10.0;
-        assert!((ist - mm).abs() < 0.05, "{}: {ist:.2} mm, Seamly2D {mm:.2} mm", rand.teil);
+        assert!((ist - mm).abs() < 0.01, "{}: {ist:.3} mm, Seamly2D {mm:.2} mm", rand.teil);
         geprueft += 1;
     }
     assert_eq!(geprueft, soll.len());

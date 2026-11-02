@@ -259,7 +259,46 @@ impl Auswertung<'_> {
             }
             marken[i] = Some(out.len() - 1);
         }
-        (out, marken)
+        let mut fest = vec![false; out.len()];
+        for (k, m) in knoten.iter().zip(&marken) {
+            if let (true, Some(s)) = (k.ist_punkt, m) {
+                fest[*s] = true;
+            }
+        }
+        self.naht_bereinigt(out, marken, &fest)
+    }
+
+    /// The chained points cleaned like Seamly2D's `mainPathPoints`
+    /// ([`crate::schleifen`]): duplicates within 0.1555 mm, spikes and loops
+    /// out. Surviving points keep their exact values; a node whose point was
+    /// removed is moved to the point that replaces it. The points of point
+    /// nodes (`fest`) are not merged away.
+    fn naht_bereinigt(
+        &self,
+        out: Vec<Pt>,
+        marken: Vec<Option<usize>>,
+        fest: &[bool],
+    ) -> (Vec<Pt>, Vec<Option<usize>>) {
+        let px: Vec<[f64; 2]> = out.iter().map(|p| [self.zu_px(p.x), self.zu_px(p.y)]).collect();
+        let (neu, karte) = crate::schleifen::naht_bereinigen_fest(&px, fest);
+        if neu.len() == px.len() && karte.iter().enumerate().all(|(i, &k)| i == k) {
+            return (out, marken);
+        }
+        let mut herkunft: Vec<Option<usize>> = vec![None; neu.len()];
+        for (k, &o) in karte.iter().enumerate() {
+            if herkunft[o].is_none() && px[k] == neu[o] {
+                herkunft[o] = Some(k);
+            }
+        }
+        let umriss = neu
+            .iter()
+            .zip(&herkunft)
+            .map(|(q, h)| match h {
+                Some(k) => out[*k],
+                None => Pt::new(self.von_px(q[0]), self.von_px(q[1])),
+            })
+            .collect();
+        (umriss, marken.into_iter().map(|m| m.map(|s| karte[s])).collect())
     }
 
     /// Länge einer Nahtlinie in Mustereinheiten.
