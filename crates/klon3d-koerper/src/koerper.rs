@@ -16,6 +16,12 @@
 //!
 //! In all three cases the output is the `body` group (points 0 … 31 421) in mm
 //! with its triangles.
+//!
+//! On the reference path follows klon3d's own **post-shaping between waist and
+//! hip** ([`crate::nachformung`], findings/124), which goes beyond the reference
+//! program: the chain's statistical shape cannot follow a steep rise right
+//! below the waist. [`aus_smis_mit`] with `nachformen = false` (command line:
+//! `klon3d koerper --wie-clo`) leaves the body exactly as the chain shapes it.
 
 use std::path::{Path, PathBuf};
 
@@ -23,7 +29,7 @@ use crate::anpassen::anpassen;
 use crate::formung::{namen_vektor, referenz_vektor, Formung};
 use crate::kette::KOERPER;
 use crate::kette_referenz::{Ende, Ganze, KetteReferenz, Konfiguration};
-use crate::messung_referenz::ANZAHL;
+use crate::messung_referenz::{platz, ANZAHL};
 use crate::person::zielperson;
 use crate::{lies_obj, Netz, Punkt3};
 
@@ -102,8 +108,12 @@ pub struct Koerper {
     /// Was beim Formen auffiel, Zeile für Zeile (Grund des Fallbacks,
     /// Formungen, Ende-Grund).
     pub meldungen: Vec<String>,
-    /// The chain's values, when it shaped the body.
+    /// The chain's values, when it shaped the body. They describe the
+    /// chain's body before [`Self::nachformung`].
     pub kette: Option<Kettenwerte>,
+    /// klon3d's own post-shaping between waist and hip, beyond the
+    /// reference program ([`crate::nachformung`]).
+    pub nachformung: Option<crate::nachformung::Bericht>,
 }
 
 /// Shapes the body from SeamlyMe measurements; `wert` asks for a measurement by
@@ -113,11 +123,22 @@ pub struct Koerper {
 /// the older chain, and [`anpassen`] last. If the reference chain fails on the
 /// measurements, that is an error.
 pub fn aus_smis(ordner: &Path, wert: &dyn Fn(&str) -> Option<f64>) -> Result<Koerper, String> {
+    aus_smis_mit(ordner, wert, true)
+}
+
+/// Like [`aus_smis`]; `nachformen` = false leaves the reference chain's body
+/// as it is (no [`crate::nachformung`]), exactly as the reference program
+/// shapes it.
+pub fn aus_smis_mit(
+    ordner: &Path,
+    wert: &dyn Fn(&str) -> Option<f64>,
+    nachformen: bool,
+) -> Result<Koerper, String> {
     let konf = Konfiguration::klon3d();
     match KetteReferenz::laden(ordner) {
         Ok(k) => {
             let e = k.aus_smis(&konf, wert)?;
-            let meldungen = vec![
+            let mut meldungen = vec![
                 format!(
                     "BASE: {} Formungen, {}",
                     e.base.e_folge.len(),
@@ -129,16 +150,37 @@ pub fn aus_smis(ordner: &Path, wert: &dyn Fn(&str) -> Option<f64>) -> Result<Koe
                     text(e.detail.grund)
                 ),
             ];
-            let netz = Netz {
+            let mut netz = Netz {
                 punkte: crate::kette_referenz::koerper_mm(&e.detail.punkte),
                 dreiecke: k.basis.dreiecke.clone(),
             };
             let kette = Some(Kettenwerte::aus_referenz(&e));
+            let mut nachformung = None;
+            let ziele = nachformen
+                .then(|| crate::nachformung::Ziele::aus_smis(wert))
+                .flatten();
+            if let Some(z) = ziele {
+                let w = &e.detail.werte;
+                let hoehe = |n: &str| w[platz(n).expect("name of the measurement set")];
+                let hoehen = (
+                    hoehe("HEIGHT_Waist"),
+                    hoehe("HEIGHT_LowHip"),
+                    hoehe("HEIGHT_UnderBust"),
+                );
+                match crate::nachformung::nachformen(&mut netz.punkte, &k.messdaten, hoehen, &z) {
+                    Ok(b) => {
+                        meldungen.extend(b.zeilen());
+                        nachformung = Some(b);
+                    }
+                    Err(g) => meldungen.push(format!("Nachformung nicht möglich: {g}")),
+                }
+            }
             Ok(Koerper {
                 netz,
                 weg: Weg::Kette,
                 meldungen,
                 kette,
+                nachformung,
             })
         }
         Err(grund) => {
@@ -188,6 +230,7 @@ fn weg_alt(ordner: &Path, wert: &dyn Fn(&str) -> Option<f64>) -> Result<Koerper,
         weg: Weg::KetteAlt,
         meldungen,
         kette: Some(kette),
+        nachformung: None,
     })
 }
 
@@ -285,5 +328,6 @@ fn alter_weg(ordner: &Path, wert: &dyn Fn(&str) -> Option<f64>) -> Result<Koerpe
         weg: Weg::Anpassen,
         meldungen,
         kette: None,
+        nachformung: None,
     })
 }

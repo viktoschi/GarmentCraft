@@ -2,8 +2,10 @@
 
 Decision of 2026-10-18: **entirely in Rust**, without Blender at runtime.
 
-**Status: 2026-10-31.** Stages 0 and 1 are done, stage 2 done — including the
-silhouette check (finding 24, `klon3d-koerper/src/silhouette.rs`) — stage 6
+**Status: 2026-11-02.** Stages 0 and 1 are done, stage 2 done — including the
+silhouette check (finding 24, `klon3d-koerper/src/silhouette.rs`) and the
+post-shaping between waist and hip (finding 124, `nachformung.rs`, beyond the
+reference program) — stage 6
 partly brought forward. The body and its
 67 measurements now come from the **reference** resizing folder (finding 64); the
 older chain is kept as a backup for old folders and the Newton fit remains the
@@ -138,14 +140,20 @@ empty `<measurements/>` no longer takes the next text of the file as its path.
 | Reference measurements | 32 values of the `DETAIL_Advanced` stage (heights in cm, apex 119.41, waist 105.71, crotch 76.87) | **available** (finding 22) |
 | Acceptance | measured circumference hits the target value | **passed with the shaping chain** (finding 31): CLO measurement bust +0.03, underbust −0.00, waist +0.02, HighHip at CLO's position −0.01, hip −0.02; sampling waist −0.89, hip −0.01. The old route via `anpassen.rs` does not reach them with the tape measure (finding 30) |
 | Height frame | measurement heights from the floor: center the mesh before measuring (lowest point y = 0) | **available** in tape-measure mode; the contour route still cuts 1.95 cm too low (finding 30) |
+| Post-shaping between waist and hip | **beyond the reference program** (`nachformung.rs`, #54): the chain hits the circumferences it knows at the places it knows, and keeps its statistical shape in between. On the user's file (waist 70 at 98 cm, high hip 83 at 93 cm, hip 90 at 77 cm) its body puts the waist at 99.6 cm, needs 24.3 cm from waist to hip instead of 21 and measures 76.7 cm at 93 cm; the chain knows the high hip only about 12 cm below the waist, and given at 5 cm (with waist height and waist-to-hip) its model stops after 2 form steps with the underbust at 81.9. So after the chain: a monotone cubic remap of the heights in a band below the hip to halfway up to the underbust (waist and hip to the file's heights, identity at the ends), then a horizontal scaling of the sections about their centre towards a target profile through waist, high hip and hip, flat at hip and waist, fading to 1 at the band ends; only torso and legs near the torso section move | **done**: waist 69.99 at 98.00 cm, high hip 82.99 at 93.00, hip 90.01 at 77.00, narrowest place at 98.0 cm, 83 → 90 rising without overshoot, 5 rounds; bust, underbust and everything above 103.2 cm bit-identical; silhouette: crossings 50 → 50, none new, dents 84 → 88 (4 existing ones slightly deeper at the gluteal cleft, the crotch and the navel). Without the step (`klon3d koerper --wie-clo`) the body stays exactly the chain's. Not handled: the front/back split of the arcs (high hip 44/41 in the file), the scaling is uniform around the section |
 | Silhouette | self-intersection, dents on the shaped body | **done** (`crates/klon3d-koerper/src/silhouette.rs`): contacts are classified as crossing, overlap or touch, and a crossing is judged by its penetration width, not by its existence. Against the base mesh, which already carries contacts, the reference shaping reduces crossings 464 → 54, dents 114 → 82 and the widest crossing 1.46 → 1.18 mm; no new crossing is wider than one already present, no overlap, no dent grows. Same rules hold on the older chain. Checked by `tests/silhouette_clo.rs` |
 
 **Acceptance criterion:** circumferences on the mesh within ±1 cm of the `.smis` values
-(bust 92.67 / waist 74 / hip 90 / HighHip 83 / underbust 76). That is
+(bust 92.67 / waist 70 / hip 90 / HighHip 83 / underbust 76 — waist 70 since
+2026-10-21). That is
 the criterion from the handover. Measured like a tape measure, as defined in
 `spez/massdefinitionen.md`; test
 `kette_clo::abnahme_aus_smis`; both numbers (CLO measurement at the candidate and
 sampling) lie within ±1 cm, HighHip applies at CLO's position (finding 31).
+That test still runs on the older file (waist 74). On the current file (waist 70)
+the reference chain reads bust 92.666, underbust 76.002, waist
+69.987, hip 90.016; with the post-shaping also the high hip at the user's own
+height, `nachformung_clo::body_between_waist_and_hip` (within 0.3 cm).
 
 **What findings 18/22 change:** the shaping is **linear in the coefficients**,
 and the fields ship with the CLO installation. The field order is
@@ -169,17 +177,17 @@ template.
    wrist along (finding 24).
 5. Acceptance: bust/underbust/waist/HighHip/hip within ±1 cm, body
    not self-intersecting. **Reached** (finding 24): 14 rounds, 1.8 s,
-   error ≤ 0.006 cm. Still open: the crotch gap at 73 cm (open seam,
-   stage 4). The silhouette check is done in
+   error ≤ 0.006 cm. The silhouette check is done in
    `crates/klon3d-koerper/src/silhouette.rs`.
 
-**What finding 25 changes:** the base mesh is **open at the seams**
-(4,170 open edges, 366 components). The torso section is therefore usually
-an open chain, not a ring. The length of the chain is already the
-circumference, though; only the closing piece across a gap of 0.02–1.25 cm is missing.
-`rumpf()` closes gaps up to 2 cm (finding 22) — this makes measuring possible at
-every torso height. Also, the bust lies at 120 cm, not at
-98 cm — the fixed heights in `abnahme.rs` are chosen wrongly.
+This list describes the older Newton route (`anpassen.rs`), kept as the last
+fallback. The "crotch gap at 73 cm" noted here once was no gap in the mesh
+(finding 60: the `body` group is closed; the section went through both thighs).
+On the current body the torso section at 73 cm is closed and the crotch lies at
+71.5 cm (file: 72). Finding 25's "base mesh open at the seams" counted all groups
+of the OBJ (teeth, lashes, eyes); the body itself is closed (finding 60).
+`rumpf()` still closes gaps up to 2 cm, which makes measuring possible at every
+torso height (finding 22).
 
 ## Stage 3 — Pattern to mesh
 

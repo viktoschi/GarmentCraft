@@ -31,6 +31,7 @@ pub mod koerper;
 pub mod massband;
 pub mod messung;
 pub mod messung_referenz;
+pub mod nachformung;
 pub mod nacharbeit_referenz;
 pub mod person;
 pub mod silhouette;

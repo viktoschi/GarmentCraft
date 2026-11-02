@@ -63,7 +63,9 @@ klon3d dxf       <pattern.sm2d> <out.dxf>           AAMA DXF export (edge = seam
 klon3d naehte    <pattern.sm2d> [--liste <file>]    check seam edges and the seam list
 klon3d netz      <pattern.sm2d> [--obj <file>]      triangle meshes and seam point pairs
 klon3d roehre    [--material radical|retifist]      solver tube test
-klon3d koerper   <measurements.smis> [--out <obj>]  shape a body from measurements
+klon3d koerper   <measurements.smis> [--out <obj>] [--wie-clo]
+                                                    shape a body from measurements (--wie-clo:
+                                                    exactly as the reference program shapes it)
 klon3d anziehen  <pattern.sm2d> [--obj <dir>]       place the pieces around the body and dress it
 klon3d zprj      <project.zprj> [--obj <file>]      read a CLO project, export its simulated mesh
 klon3d vergleich <a.obj> <b.obj>                    surface distance between two meshes

@@ -10,7 +10,7 @@
 //! klon3d netz   <muster.sm2d> [--liste <datei.naehte>] [--ohne-naehte] [--kante <mm>] [--winkel <grad>]
 //!               [--fang <mm>] [--zeichnung] [--svg <datei>] [--nebeneinander] [--obj <datei>] [--paare <datei>]
 //! klon3d roehre [--material radical|retifist] [--reduktion <%>] [--kante <mm>] [--spalt] [--rutsch <s>] [--obj <datei>]
-//! klon3d koerper <massdatei.smis> [--out <koerper.obj>] [--ordner <Resizing>]
+//! klon3d koerper <massdatei.smis> [--out <koerper.obj>] [--ordner <Resizing>] [--wie-clo]
 //! klon3d lage   <muster.sm2d> [--naehte <datei>] [--schreiben <datei>]
 //! klon3d zprj   <projekt.zprj> [--teile] [--naehte] [--stoffe] [--netz]
 //!                [--obj <datei.obj>] [--koerper-obj <datei.obj>]
@@ -121,9 +121,12 @@ fn hilfe() {
       Endzustand (mm) und daneben die Dehnung je Dreieck (.csv)
 
   klon3d koerper <massdatei.smis> [--out <koerper.obj>] [--ordner <Resizing>]
+                [--wie-clo]
       formt den Koerper mit der Formungskette nach CLO (Fallback: alter Weg
-      ueber anpassen, wenn Resizing-Daten fehlen); --out schreibt die Groesse
-      als OBJ
+      ueber anpassen, wenn Resizing-Daten fehlen) und formt danach zwischen
+      Taille und Huefte nach, was ueber CLO hinausgeht; --wie-clo laesst das
+      weg und gibt den Koerper genau wie die Kette; --out schreibt die
+      Groesse als OBJ
 
   klon3d anziehen <muster.sm2d> [--masse <datei.smis>] [--naehte <datei>]
                   [--lage <datei>] [--naehen <m/s>] [--naehbilder <n>]
@@ -929,16 +932,23 @@ fn befehl_roehre(args: &[String]) -> ExitCode {
 // ────────────────────────────────────────────────────────── koerper ──
 
 fn befehl_koerper(args: &[String]) -> ExitCode {
-    use klon3d_koerper::koerper::{aus_smis, ordner};
+    use klon3d_koerper::koerper::{aus_smis_mit, ordner};
 
     const AUFRUF: &str =
-        "Aufruf: klon3d koerper <massdatei.smis> [--out <koerper.obj>] [--ordner <Resizing>]";
+        "Aufruf: klon3d koerper <massdatei.smis> [--out <koerper.obj>] [--ordner <Resizing>] [--wie-clo]";
     let mut smis_pfad = None;
     let mut aus = None;
     let mut resizing = ordner();
+    let mut nachformen = true;
     let mut i = 0;
     while i < args.len() {
         match args[i].as_str() {
+            // the body exactly as the reference chain shapes it, without
+            // klon3d's post-shaping between waist and hip
+            "--wie-clo" => {
+                nachformen = false;
+                i += 1;
+            }
             o @ ("--out" | "--ordner") => {
                 let Some(w) = args.get(i + 1) else {
                     eprintln!("{o} ohne Pfad
@@ -981,7 +991,7 @@ fn befehl_koerper(args: &[String]) -> ExitCode {
     };
 
     let t0 = std::time::Instant::now();
-    let k = match aus_smis(&resizing, &|n| smis.wert(n)) {
+    let k = match aus_smis_mit(&resizing, &|n| smis.wert(n), nachformen) {
         Ok(k) => k,
         Err(e) => {
             eprintln!("Körper nicht formbar: {e}");
@@ -1004,7 +1014,11 @@ fn befehl_koerper(args: &[String]) -> ExitCode {
     if let Some(e) = &k.kette {
         let m = &e.werte;
         let soll = |n: &str| smis.wert(n).map_or("–".to_string(), |v| format!("{v:.2}"));
-        println!("  Maße am Körper (cm, Soll aus der Maßdatei):");
+        if k.nachformung.is_some() {
+            println!("  Maße der Formungskette, vor der Nachformung (cm, Soll aus der Maßdatei):");
+        } else {
+            println!("  Maße am Körper (cm, Soll aus der Maßdatei):");
+        }
         for (was, j, name) in [
             ("Höhe", 0, "height"),
             ("Brust", 2, "bust_circ"),
