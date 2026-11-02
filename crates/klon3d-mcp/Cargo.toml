@@ -1,0 +1,26 @@
+[package]
+name = "klon3d-mcp"
+description = "MCP server (stdio): drives the klon3d application headless - open, inspect, commands, preview, simulation"
+version.workspace = true
+edition.workspace = true
+# The same as klon3d-app, which it builds on.
+rust-version = "1.99"
+license.workspace = true
+
+[[bin]]
+name = "klon3d-mcp"
+path = "src/main.rs"
+
+[dependencies]
+klon3d-app = { path = "../klon3d-app" }
+klon3d-pattern = { path = "../klon3d-pattern" }
+klon3d-pipeline = { path = "../klon3d-pipeline" }
+klon3d-mesh = { path = "../klon3d-mesh" }
+klon3d-sim = { path = "../klon3d-sim" }
+klon3d-koerper = { path = "../klon3d-koerper" }
+# Same features as klon3d-app; only the egui types are used here.
+eframe = { version = "0.37", default-features = false, features = ["accesskit", "default_fonts", "persistence", "wgpu_no_default_features", "x11", "wayland"] }
+# The headless window and its wgpu renderer: a library here, not test-only code.
+egui_kittest = { version = "0.37", features = ["eframe", "wgpu"] }
+image = { version = "0.25", default-features = false, features = ["png"] }
+serde_json = "1"

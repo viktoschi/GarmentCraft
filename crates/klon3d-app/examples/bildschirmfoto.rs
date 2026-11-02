@@ -139,13 +139,25 @@ fn zahl(args: &[String], i: usize, aufruf: &str) -> Result<(f32, usize), ExitCod
     }
 }
 
+/// `WgpuTestRenderer::new` sets up the device at once and panics without an adapter; caught here so
+/// that a machine without one gets exit code 3 and a sentence instead of a backtrace.
+fn renderer() -> Option<WgpuTestRenderer> {
+    let vorher = std::panic::take_hook();
+    std::panic::set_hook(Box::new(|_| {}));
+    let r = std::panic::catch_unwind(WgpuTestRenderer::new).ok();
+    std::panic::set_hook(vorher);
+    r
+}
+
 fn laufen(opt: &Optionen) -> Result<(), String> {
+    let Some(renderer) = renderer() else {
+        eprintln!("kein Grafikbeschleuniger (wgpu-Adapter) vorhanden");
+        std::process::exit(3);
+    };
     let mut figuren: Harness<'_, App> = Harness::builder()
         .with_size([opt.breite, opt.hoehe])
         .with_pixels_per_point(opt.massstab)
-        // Rendering is deferred until `figuren.render()`; a missing adapter is then an error we
-        // can report instead of a panic in the builder.
-        .renderer(WgpuTestRenderer::new())
+        .renderer(renderer)
         .build_eframe(|cc| App::neu(cc));
 
     // Through the app's own state, not the builder's theme: the app applies `self.thema` every
@@ -173,9 +185,9 @@ fn laufen(opt: &Optionen) -> Result<(), String> {
     figuren.run();
     figuren.run();
 
-    let bild = figuren.render().map_err(|e| {
-        format!("kein Bild gerendert: {e}\nKennung 3: kein Grafikbeschleuniger vorhanden?")
-    })?;
+    let bild = figuren
+        .render()
+        .map_err(|e| format!("kein Bild gerendert: {e}"))?;
 
     if let Some(ordner) = opt.aus.parent() {
         if !ordner.as_os_str().is_empty() {

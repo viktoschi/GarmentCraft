@@ -40,6 +40,7 @@ stiffness and self-collision (see [PLAN.md](PLAN.md)).
 | `klon3d-sim` | shared scene with two solvers: implicit CG (the main path) and XPBD (cross-check); body collider as signed distance over a grid; placement around the body; self-collision | tube test matches the analytic result; blouses dressed on the body with 94.6–99.4 % of seam pairs within 10 mm, held by tension alone |
 | `klon3d-view` | `klon3d-fenster`: viewer for piece outlines, PNG output (Win32, Windows only) | works |
 | `klon3d-cli` | the `klon3d` command line | works |
+| `klon3d-mcp` | MCP server (stdio): agents open, inspect, command, photograph and simulate the application headless ([README](crates/klon3d-mcp/README.md)) | works |
 
 Planned: a `wgpu` viewport and an `egui` application. The roadmap with all stages is in [PLAN.md](PLAN.md),
 the material model in [MATERIAL.md](MATERIAL.md).
