@@ -15,3 +15,4 @@ klon3d-pattern = { path = "../klon3d-pattern" }
 klon3d-koerper = { path = "../klon3d-koerper" }
 klon3d-mesh = { path = "../klon3d-mesh" }
 klon3d-sim = { path = "../klon3d-sim" }
+klon3d-pipeline = { path = "../klon3d-pipeline" }

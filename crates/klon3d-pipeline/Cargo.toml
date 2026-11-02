@@ -1,0 +1,13 @@
+[package]
+name = "klon3d-pipeline"
+description = "Library chain for klon3d: pattern, mesh, body, placement and frame stepping without a command line"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+
+[dependencies]
+klon3d-pattern = { path = "../klon3d-pattern" }
+klon3d-koerper = { path = "../klon3d-koerper" }
+klon3d-mesh = { path = "../klon3d-mesh" }
+klon3d-sim = { path = "../klon3d-sim" }

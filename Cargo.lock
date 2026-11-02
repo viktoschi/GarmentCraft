@@ -1535,6 +1535,7 @@ dependencies = [
  "klon3d-koerper",
  "klon3d-mesh",
  "klon3d-pattern",
+ "klon3d-pipeline",
  "klon3d-sim",
 ]
 
@@ -1561,6 +1562,16 @@ dependencies = [
  "quick-xml 0.42.0",
  "serde",
  "thiserror 2.0.21",
+]
+
+[[package]]
+name = "klon3d-pipeline"
+version = "0.1.0"
+dependencies = [
+ "klon3d-koerper",
+ "klon3d-mesh",
+ "klon3d-pattern",
+ "klon3d-sim",
 ]
 
 [[package]]

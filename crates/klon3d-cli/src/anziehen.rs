@@ -24,18 +24,14 @@
 use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 
-use klon3d_koerper::anordnung_clo::{aus_clo_koerper, CloNummern};
-use klon3d_koerper::koerper::{anordnung, aus_smis, ordner};
-use klon3d_mesh::{vernetze, Parameter};
-use klon3d_pattern::geom::Auswertung;
-use klon3d_pattern::kanten::Kurvenquelle;
-use klon3d_pattern::naehte::{lies_nahtliste, pruefe_naehte};
-use klon3d_sim::netzkoerper::{clo_nach_szene, SUCHTIEFE};
-use klon3d_sim::platzierung::{anziehen, lies_lage, platziere, Angezogen, Anziehbar, Anziehen, Huellen, Koerperteile};
+use klon3d_koerper::koerper::ordner;
+use klon3d_mesh::Parameter;
+use klon3d_pipeline::{self as pipeline, Fehler, Koerperquelle, Muster};
+use klon3d_sim::netzkoerper::SUCHTIEFE;
+use klon3d_sim::platzierung::{lies_lage, platziere, Angezogen, Anziehbar, Anziehen};
 use klon3d_sim::{
-    abstand, ausgabe, dehnung, farbkarte, messung, nahtlage, spannung, CpuReferenz, ImplizitCg, ImplizitParameter, Koerper,
-    Koerpernetz,
-    Material, Simparameter, Szene, Teilvorgabe, RADICAL_RUBBER_04, WEICH_FAKTOR,
+    abstand, ausgabe, dehnung, farbkarte, messung, nahtlage, spannung, CpuReferenz, ImplizitCg, ImplizitParameter,
+    Material, Simparameter, Szene, RADICAL_RUBBER_04, WEICH_FAKTOR,
 };
 
 const AUFRUF: &str = "Aufruf: klon3d anziehen <muster.sm2d> [--masse <datei.smis>] [--zprj <projekt.zprj>] [--naehte <datei>] \
@@ -181,122 +177,46 @@ pub fn befehl_anziehen(args: &[String]) -> ExitCode {
     }
     let Some(muster_pfad) = muster_pfad else { return fehler(AUFRUF) };
 
-    // Muster und seine eigenen Maße.
-    let muster = match klon3d_pattern::read_path(&muster_pfad) {
+    // Pattern, seam list, mesh, placement file and body all come from the
+    // library chain (`klon3d_pipeline`); this command only adds its options
+    // and the printed report.
+    let muster = match Muster::laden(&muster_pfad, None) {
         Ok(m) => m,
-        Err(e) => return fehler(format!("{}: {e}", muster_pfad.display())),
-    };
-    let neben = |p: &str| {
-        let p = Path::new(p);
-        if p.is_absolute() {
-            p.to_path_buf()
-        } else {
-            muster_pfad.parent().unwrap_or(Path::new(".")).join(p)
-        }
-    };
-    let Some(mess_muster) = muster.measurements.as_deref().map(neben) else { return fehler("Muster nennt keine Maßdatei") };
-    let ev = match Auswertung::lade(&muster, &mess_muster) {
-        Ok(e) => e,
-        Err(e) => return fehler(format!("{}: {e}", mess_muster.display())),
+        Err(e) => return fehler(e),
     };
     let naehte_pfad = naehte.unwrap_or_else(|| muster_pfad.with_extension("naehte"));
-    let defs = match std::fs::read_to_string(&naehte_pfad).map_err(|e| e.to_string()).and_then(|t| lies_nahtliste(&t).map_err(|e| e.to_string())) {
+    let defs = match pipeline::nahtliste(&naehte_pfad) {
         Ok(d) => d,
-        Err(e) => return fehler(format!("{}: {e}", naehte_pfad.display())),
+        Err(e) => return fehler(e),
     };
-    let bericht = match pruefe_naehte(&ev, &defs, Kurvenquelle::Seamly) {
-        Ok(b) => b,
-        Err(e) => return fehler(format!("{}: {e}", naehte_pfad.display())),
-    };
-    let netz = match vernetze(&ev, Kurvenquelle::Seamly, &bericht.naehte, &Parameter::default()) {
+    let netz = match muster.netz(&defs, &Parameter::default()) {
         Ok(n) => n,
+        Err(Fehler::Naehte(e)) => return fehler(format!("{}: {e}", naehte_pfad.display())),
         Err(e) => return fehler(e),
     };
     let lage_pfad = lage.unwrap_or_else(|| muster_pfad.with_extension("lage"));
-    let liste = match std::fs::read_to_string(&lage_pfad).map_err(|e| e.to_string()).and_then(|t| lies_lage(&t)) {
+    let liste = match pipeline::lageliste(&lage_pfad) {
         Ok(l) => l,
-        Err(e) => return fehler(format!("{}: {e}", lage_pfad.display())),
+        Err(e) => return fehler(e),
     };
 
-    // Körper: aus CLOs Projekt (`--zprj`) oder aus der Maßdatei.
-    //
-    // Beide Wege liefern dasselbe: Punkte und Dreiecke in Millimetern im
-    // CLO-Avatarraum und die Anordnung (Rumpf, Arme, Landmarken) dazu. Der
-    // Unterschied ist die Herkunft — und dass CLOs Körper schon die
-    // Simulationspose ist, während der geformte erst dorthin kommt.
-    let (punkte, dreiecke, an, herkunft) = match &zprj {
-        Some(pfad) => {
-            let projekt = match klon3d_pattern::zprj::Projekt::lies(pfad) {
-                Ok(p) => p,
-                Err(e) => return fehler(format!("{}: {e}", pfad.display())),
-            };
-            let Some(k) = projekt.koerper else {
-                return fehler(format!("{}: keine .avt mit einem Körper", pfad.display()));
-            };
-            let punkte: Vec<[f64; 3]> = k.punkte.iter().map(|q| [q.x, q.y, q.z]).collect();
-            let dreiecke: Vec<[usize; 3]> = k
-                .dreiecke
-                .iter()
-                .map(|d| [d[0] as usize, d[1] as usize, d[2] as usize])
-                .collect();
-            let nummern = match CloNummern::aus_ordner(&resizing) {
-                Ok(n) => n,
-                Err(e) => return fehler(format!("{}: {e}", resizing.display())),
-            };
-            let netz = klon3d_koerper::Netz { punkte: punkte.clone(), dreiecke: dreiecke.clone() };
-            let an = match aus_clo_koerper(&netz, &nummern) {
-                Ok(a) => a,
-                Err(e) => return fehler(format!("{}: {e}", pfad.display())),
-            };
-            let herkunft = format!(
-                "{} (CLO .avt), {} Punkte, {} Rumpf, {} + {} Arm",
-                pfad.display(),
-                punkte.len(),
-                an.rumpf.len(),
-                an.arme[0].len(),
-                an.arme[1].len()
-            );
-            (punkte, dreiecke, an, herkunft)
-        }
-        None => {
-            // Körper aus der Maßdatei (Vorgabe: die des Musters).
-            let masse = masse.unwrap_or(mess_muster);
-            let smis = match klon3d_pattern::lies_smis(&masse) {
-                Ok(s) => s,
-                Err(e) => return fehler(format!("{}: {e}", masse.display())),
-            };
-            let k = match aus_smis(&resizing, &|n| smis.wert(n)) {
-                Ok(k) => k,
-                Err(e) => return fehler(format!("Körper nicht formbar: {e}")),
-            };
-            let an = match anordnung(&resizing, &k.netz) {
-                Ok(a) => a,
-                Err(e) => return fehler(e),
-            };
-            let herkunft = format!("{} ({})", masse.display(), k.weg.name());
-            (k.netz.punkte, k.netz.dreiecke, an, herkunft)
-        }
+    // Body: from the `.zprj` project (`--zprj`) or from the measurement file
+    // (default: the pattern's own).
+    let masse = masse.unwrap_or_else(|| muster.massdatei().to_path_buf());
+    let quelle = match &zprj {
+        Some(pfad) => Koerperquelle::CloProjekt(pfad, resizing),
+        None => Koerperquelle::MassdateiMitOrdner(&masse, resizing),
     };
-    let koerper = match Koerpernetz::aus_clo_mm(&punkte, &dreiecke, SUCHTIEFE) {
-        Ok(n) => n,
-        Err(e) => return fehler(format!("Körpernetz: {e}")),
+    let geladen = match pipeline::koerper(quelle) {
+        Ok(k) => k,
+        Err(e) => return fehler(e),
     };
-    let c = clo_nach_szene;
-    let huellen = match Huellen::neu(&Koerperteile {
-        punkte: &koerper.punkte,
-        dreiecke: &koerper.dreiecke,
-        rumpf: &an.rumpf,
-        arme: [&an.arme[0], &an.arme[1]],
-        hals_vorn: c(an.hals_vorn),
-        hals_hinten: c(an.hals_hinten),
-        hals_seitlich: an.hals_seitlich.map(c),
-        schulter: an.schulter.map(c),
-        ellbogen: an.ellbogen.map(c),
-    }) {
+    let (koerper, an, herkunft) = (&geladen.netz, &geladen.anordnung, &geladen.herkunft);
+    let huellen = match pipeline::huellen(&geladen) {
         Ok(h) => h,
-        Err(e) => return fehler(format!("Hüllkörper: {e}")),
+        Err(e) => return fehler(e),
     };
-    let p = match klon3d_sim::platzierung::platziere_mit(&netz, &liste, &huellen, !ohne_weite) {
+    let p = match pipeline::platzieren(&netz, &liste, &huellen, !ohne_weite) {
         Ok(p) => p,
         Err(e) => return fehler(format!("{}: {e}", lage_pfad.display())),
     };
@@ -350,18 +270,14 @@ pub fn befehl_anziehen(args: &[String]) -> ExitCode {
     }
 
     // Je Teil das Material, in der Dicke der Lageangabe.
-    let vg = |name: &str| {
-        let dicke = p.netz.teile.iter().position(|t| t.teil == name).and_then(|ti| p.dicke(ti));
-        Teilvorgabe { material: dicke.map_or(material, |d| material.mit_dicke(d)), reduktion: 0.0 }
-    };
     let dicken: Vec<String> = (0..p.netz.teile.len())
         .filter_map(|ti| p.dicke(ti).map(|d| format!("{} {:.1} mm", p.netz.teile[ti].teil.rsplit(" - ").next().unwrap_or(""), d * 1e3)))
         .collect();
     println!("  Material     {} {:.1} mm{}", material.name, material.dicke_m * 1e3, if dicken.is_empty() { String::new() } else { format!("; {}", dicken.join(", ")) });
     // XPBD: die Nahtfeder des Anziehens als Nachgiebigkeit in der Szene.
     let naht_nachgiebigkeit = if xpbd { 1.0 / ablauf.naht_k } else { 0.0 };
-    let param = Simparameter { schwerkraft: [0.0, 0.0, -9.81], daempfung: 1.0, naht_nachgiebigkeit, ..Simparameter::default() };
-    let mut s = Szene::aus_netz(&p.netz, &vg, &|ti, q| p.lage(ti, q), vec![Koerper::netz(koerper.clone())], param);
+    let param = Simparameter { naht_nachgiebigkeit, ..pipeline::standard_simparameter() };
+    let mut s = pipeline::szene_aus(&p, &geladen, material, 0.0, param);
     if xpbd {
         s.param.unterschritte = s.unterschritte_weich(WEICH_FAKTOR);
         println!("  Rechenweg    XPBD (CpuReferenz), {} Unterschritte je Bild (weich, Faktor {WEICH_FAKTOR})", s.param.unterschritte);
@@ -937,7 +853,7 @@ fn rechnen<R: Anziehbar>(
     let mut je_bild = Vec::new();
     let mut fehler: Option<String> = None;
     let mut letzt = std::time::Instant::now();
-    let erg = anziehen(s, rw, ablauf, &mut |bild, s, rw| {
+    let erg = pipeline::ablauf::anziehen(s, rw, ablauf, &mut |bild, s, rw| {
         je_bild.push((bild, letzt.elapsed().as_secs_f64() * 1e3, kennzahl(rw)));
         if bilder.is_some() && bild % 60 == 0 {
             eprintln!("  Bild {bild}: {:.1} ms", je_bild[bild - 1].1);
