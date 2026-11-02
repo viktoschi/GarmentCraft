@@ -291,7 +291,7 @@ includes **motion** (stage 7), and that needs the computing power of the GPU.
 | **4a′ Tube, implicit with CG like CLO (CPU reference, basis)** | second computation path `ImplizitCg` in `klon3d-sim`: backward Euler, matrix-free PCG with 3×3 diagonal blocks, contact filter, normal force from the system, Coulomb friction, warm start; CLO setting of 1 step per frame, 50 CG iterations, seam spring 500 N/m | **done** (finding 35): tube, both fabrics at 5.5/10%, with the same acceptance as 4a, slip test at most 1.6% off the discrete path; frictionless, the same equilibrium as XPBD; blouse 13–137 ms per frame instead of 1.2–4 s, on the GPU around 310 instead of 140,000 dispatches per frame. Limits: a stiff seam only just converges, loose pieces come to rest poorly with 50 iterations. The basis since ADR-020 |
 | **Substeps per frame** | `schritte_je_bild` in `ImplizitParameter` | **done**: default 5, matching the `Nonlinear` preset (residual 1e-5). With one substep a 5.5% Radical band on the reference body does not settle and sits 2-4% off the tape-measure circumference; the error falls monotonically with the substep count (0.06% at five) |
 | **Body as collision body** (before 4c) | body from `klon3d koerper` as a mesh in `klon3d-sim` (`netzkoerper.rs`, `Koerper::Netz`): signed distance via the nearest point and angle-weighted pseudonormals, grid search (20 mm cells, 10 mm search depth), in the implicit step a penetration check along the path with Coulomb friction on the impact. Test cases: tube on a cylinder mesh, band around the waist, point rain | **done** (finding 94): tube on the mesh, ε within 0.002 pp of the analytic case, frictionless the same equilibrium, slip test −0.11/+0.41%; band (10 mm mesh) at rest in all four cases, edges against the tape measure in their plane: Retifist ≤ 0.25%, Radical ≤ 2.7%, no point inside the skin; point rain at 6 m/s 100/100 at the impact location (without the penetration check 10/100). Open: the Radical band in the 5 mm mesh folds and does not come to rest without self-collision; body vertex against cloth triangle; moving body |
-| **4b GPU** | the implicit step from 4a′ as a WGSL compute shader via `wgpu`, `f32` (ADR-020): forces and 3×3 Jacobian blocks per edge, seam and bending, gathered per point via neighbor lists (no atomics); matrix-free A·p, block-Jacobi preconditioner with contact filter, dot products as reductions in a fixed order, warm start; contact, normal force and friction per point; collision and self-collision via spatial hashing. To be settled with 4b (finding 35, section 5): a better preconditioner for stiffer seams and loose pieces; whether edge springs are replaced by a triangle continuum | the same equilibrium as `ImplizitCg` on the tube and on the blouse in a standing pose (define and justify the tolerance), also at body height; slip test as in finding 35; Bluse3 v2 at ≥ 30 frames per second on the RTX 3090. **Partly done** (#27, #29, #33): the solve runs on the GPU and is **2.09× faster than the CPU per solve** on the blouse (5.34 against 11.15 ms, 120 solves after a warm-up, same `cg_max` and tolerance), 1.77× per frame (**38.7 against 68.6 ms**, was 47.3 before #33); on the CLO body 382/278/281 ms per frame against 455/383/423 — still above 33 ms. The operator runs over the whole grid (0.037 against 0.46 ms per pass), the reductions on one workgroup, all passes in one submission; the release pass reuses `Δv` on the device (#33: 43.2 → 37.2 ms, 14 %, and the second solve drops out when no point is held). **30 fps reached with #36:** the system build moved to the device as well, the frame is **27.6–29.1 ms against 33.3** (three runs, 2026-11-02), and `bluse_schafft_30_bilder` runs in the suite. Every record of the device build agrees with the CPU build (`aufbau_wie_cpu`). Still open, each as a change of its own: the solves run into `cg_max` unconverged (the CPU needs 211 iterations to reach 1e-5; the lever is a preconditioner), contact queries and self-collision on the GPU, the CLO body (278–382 ms per frame before #36, not measured again), a CPU fallback for small systems such as the tube; GPU tests skip themselves without an adapter and report it |
+| **4b GPU** | the implicit step from 4a′ as a WGSL compute shader via `wgpu`, `f32` (ADR-020): forces and 3×3 Jacobian blocks per edge, seam and bending, gathered per point via neighbor lists (no atomics); matrix-free A·p, block-Jacobi preconditioner with contact filter, dot products as reductions in a fixed order, warm start; contact, normal force and friction per point; collision and self-collision via spatial hashing. To be settled with 4b (finding 35, section 5): a better preconditioner for stiffer seams and loose pieces; whether edge springs are replaced by a triangle continuum | the same equilibrium as `ImplizitCg` on the tube and on the blouse in a standing pose (define and justify the tolerance), also at body height; slip test as in finding 35; Bluse3 v2 at ≥ 30 frames per second on the RTX 3090. **Partly done** (#27, #29, #33): the solve runs on the GPU and is **2.09× faster than the CPU per solve** on the blouse (5.34 against 11.15 ms, 120 solves after a warm-up, same `cg_max` and tolerance), 1.77× per frame (**38.7 against 68.6 ms**, was 47.3 before #33); on the CLO body 382/278/281 ms per frame against 455/383/423 — still above 33 ms. The operator runs over the whole grid (0.037 against 0.46 ms per pass), the reductions on one workgroup, all passes in one submission; the release pass reuses `Δv` on the device (#33: 43.2 → 37.2 ms, 14 %, and the second solve drops out when no point is held). **30 fps reached with #36:** the system build moved to the device as well, the frame is **27.6–29.1 ms against 33.3** (three runs, 2026-11-02), and `bluse_schafft_30_bilder` runs in the suite. Every record of the device build agrees with the CPU build (`aufbau_wie_cpu`). Still open, each as a change of its own: the solves run into `cg_max` unconverged (the CPU needs **182** iterations to reach 1e-5; every preconditioner tried in #41 lowers iterations only at more operator work, see below), contact queries and self-collision on the GPU, the CLO body (278–382 ms per frame before #36, not measured again), a CPU fallback for small systems such as the tube; GPU tests skip themselves without an adapter and report it |
 | **4c Placement** | place the 2D pieces around the body before sewing. CLO puts them on arrangement points on hull bodies around torso, arms and legs (finding 71, addendum); klon3d needs its own simple approach, e.g. zone and side per piece (in the seam list or a separate file) and cylinders or ellipses from the body measurements of stage 2. Then the seam constraints pull the pieces together. **Built** (`platzierung.rs`, placement file `<pattern>.lage`, `klon3d anziehen`): vertical torso prism from the convex hull of the torso points, around the arm the cross-section hull per centimeter, neck seam with height and radius per angle from the four landmarks (slanted, not a horizontal circle; finding 121); per piece: zone, reference point (also from another piece of the same block), circumferential position in degrees or cm, height at a reference height, `gespiegelt` (mirrored), `drehung` (rotation), `abstand` (offset) | all pieces of Bluse3 v2 lie around the body without penetration, the seams close. **Largely done** (findings 95, 96): 16 sewn pieces placed (12 glued-on ones are missing until glue zones exist); dressed with a limited sewing speed (0.1 m/s) and body vertex against cloth triangle during sewing, around the arm a length-preserving arm prism: no point inside the skin, every seam median < 0.8 mm, **98.6% of seam pairs ≤ 10 mm**, 18 of 24 seams fully closed (finding 95 without both: 92.4%). **Generality** (finding 98): Bluse1 v25 and bustier v1 as further test patterns, all three with the same settings — sewn while held (without gravity), cloth points pushed out of the skin beforehand, seam spring 2,000 N/m during dressing, thickness per piece (`dicke` in the placement file), then 2 s of settling and a 10 s hold phase under full gravity (ADR-023): **Bluse3 99.4%, Bluse1 99.1%, bustier 94.6%**, no piece sinks more than 0.4 mm. Finding 100: Bolero v37 96.5% (pleats as darts), skirt v36 95.1% (holds, but not fully at rest: flared panels overlap on the vertical prism); finding 101: seam list and placement **automatic** (`klon3d naehte --vorschlag`, `klon3d lage`); dressed entirely without hand-written files, all five hold (Bluse3 98.6%, Bluse1 98.0%, bustier 96.0%, bolero without sleeves 96.0%, skirt 95.7% — the skirt reacts chaotically to tenths of a millimeter in the initial placement); the placement suggestion lies 0.3–2.8 cm off the hand-made placements. Finding 102: the unrest came from truncated CG solves (50 iterations); with up to 600 iterations during dressing, a torso hull that widens under flared panels, and settling until at rest (2–20 s) before the hold phase: **Bluse3 98.9%, Bluse1 98.9%, bustier 93.6%, bolero 94.5%, skirt 99.2%** with hand-written files, all hold (±0.2 mm), the skirt is insensitive to the initial placement; computing time up to three times longer. Open: corners (sleeve hem, collar end, cup attachments), zones for legs and head, gaps in the pattern reader (`cutArc`, `pointOfIntersectionArcs`, `pointOfIntersectionCurves`, curve names with an underscore) |
 | **4d Test blouse v26 standing** | the whole blouse on the shaped body from `klon3d koerper` | acceptance criterion below; in addition "holds" per ADR-023: after dressing ≥ 10 s of full gravity, no piece sinks more than 5 mm, nothing pinned. **Built** (`klon3d-sim/tests/bluse2_stehend.rs`, task #31): the pattern has no seam list, so `bluse2_v26.naehte` is written by hand — the 16 seams of `klon3d naehte --vorschlag` plus the collar on the neckline (V17), the outer collar on the inner at the fold (V18) and the plunge trim on the plunge edge (V19); the 9 decorative discs are left off on purpose. `bluse2_v26.lage` places 13 of the 22 pieces. Dressed with the settings of 4c (200 frames sewing, settle, 10 s hold), 6 022 points, about 5 min per run, **99.2 % of the seam pairs ≤ 10 mm** (764 of 770), at rest at 0.0002 m/s, **no piece sinks at all**, deepest point +0.20 mm. **Four of the five faults show**: the plunge opening at the bust goes from 130.0 mm flat to 175.3 worn (+45.3); the shoulder blade carries +11.08 % against +5.84 % for the back pieces as a whole (+5.24 pp); the sleeve at armpit height reads +4.94 % (the pattern was cut 4.4 % / 2.2 % too small); the collar's free upper edge stands 31.2 mm off the skin at its two front ends, and the ends are 143.0 mm apart. **The sleeve cap does not stand off** — 0.7 mm median air over the shoulder — because the seam list sews the cap to the armhole at matching lengths (41.5308 against 41.5310 cm), so no excess can lift; on the real garment the stand-off comes from the cap's shape, which a seam list cannot express. The test pins that finding. Open: seams V08/V09/V10/V13/V17 keep one pair each at 20–30 mm (the shoulder corner and the armhole, where the body is not covered by the hull), and the donut and discs are not simulated |
 
@@ -409,20 +409,98 @@ the operator (`P⁻¹·ap` in one pass, saving a barrier) — 5.09 against 5.15 
 solve, i.e. nothing; the earlier 2 % was noise from a busy GPU.
 
 **The solver does not converge, and that is the real finding.** With
-`cg_max` 50 it stops at a relative residual of ~6.9e-3. The CPU with the same
-system needs **211 iterations** to reach the tolerance of 1e-5. Every solve in
-the frame therefore runs into its budget and stops unconverged; the iteration
-count is not a matter of tuning but of the preconditioner. `cg_max` was left
+`cg_max` 50 it stops at a relative residual of 6.0e-3. The CPU with the same
+system needs **182 iterations** to reach the tolerance of 1e-5
+(`tests/vorkond.rs` measures both ends through the real solver: 50 iterations →
+`nicht_konvergiert`, rest 6.02e-3; budget 400 → converged at 182). Every solve in
+the frame therefore runs into its budget and stops unconverged. `cg_max` was left
 untouched — lowering it to buy frames is named as forbidden in the task, and
-raising it makes the frame slower, not better.
+raising it makes the frame slower, not better (see the cost table below).
 
-The next lever is therefore a preconditioner that actually reduces iterations
-(finding 35 section 5) or moving the contact queries to the GPU — both changes of
-their own. The system build moved with #36. The CG curve of the blouse system
-falls geometrically by ~0.95 per iteration after the first drop (1.7e-2 at 30,
-5.5e-3 at 50, 9.8e-6 at 180): a broad spectrum with an effective condition
-number of ~1500 and no plateau, so deflating a few vectors does not help; a
-two-level or multigrid preconditioner would.
+The CG curve falls geometrically by 0.942–0.958 per iteration over the whole run
+(5.36e-2 at 10, 1.75e-2 at 30, 6.02e-3 at 50, 2.42e-4 at 120, 1e-5 at 182): one
+rate, no plateau and no fast phase to exploit. The condition number is
+**κ(A) = 1961** (λ_min 1.31e-5, λ_max 2.5677e-2, power and shifted power
+iteration), and the 3×3 block diagonal changes almost nothing:
+**κ(D⁻¹A) = 2097** in the shorter run and **3434** in the longer one, because
+λ_min of the preconditioned operator keeps falling (7.4e-4, see
+`vorkond_diag11`). The diagonal is therefore nearly the identity — the mass
+share of its trace is 9.2e-6 to 2.4e-3, and mass-*only* preconditioning makes
+things far worse (κ 7039). The measured rate 0.9513 corresponds to κ_eff ≈ 1600,
+in the same range as κ(A) = 1961; CG once again beats the classical bound (a rate
+of 0.9558 would need 255 iterations, it takes 182), so the 182 iterations are
+simply the cost of an h⁻²-type spectrum.
+
+**#41 measured every candidate and came up short (acceptance point 4).** The
+decisive quantity is not iterations but work: a V-cycle applies the fine operator
+several times per CG iteration, and the per-iteration overhead (reductions,
+vector updates) is charged per iteration, not per pass. Cost per substep is
+`iterations × (passes/iter × 0.0382 ms + 0.0658 ms)`, frame is five substeps
+plus 0.48 ms topology build each, and point 2 allows 33.3 ms:
+
+| variant | aggregates | iterations to 1e-5 | fine passes | vs. 182 | ms/solve | frame | point 2 |
+|---|---|---|---|---|---|---|---|
+| block-Jacobi, budget 50 (today) | — | stops at 50 | 50 | — | 5.20 | 28.3 | met, **unconverged** |
+| block-Jacobi, converged | — | 182 | 182 | 1.00× | 18.9 | 97 | 2.9× over |
+| additive two-level | 16 … 512 | 112 … 177 | = iterations | 0.62–0.97× | 11.6–18.4 | 61–94 | 1.8–2.8× over |
+| one-level V(1,1), ω 0.7 | 16 | 55 | 223 | 1.23× | 12.1 | 63 | 1.9× over |
+| one-level V(2,2), ω 0.7 | 16 | 43 | 263 | 1.45× | 12.9 | 67 | 2.0× over |
+| one-level V(2,2), ω 0.7 | 32 | 49 | 299 | 1.64× | 14.6 | 76 | 2.3× over |
+| one-level V(3,3), ω 0.7 | 16 | 38 | 311 | 1.71× | 14.4 | 74 | 2.2× over |
+| four-level V(1,1), ω 0.7 | 965→121→16→2 | 61 | 247 | 1.36× | 13.5 | 70 | 2.1× over |
+| four-level V(2,2), ω 0.7 | 965→121→16→2 | 44 | 269 | 1.48× | 13.2 | 68 | 2.0× over |
+| Chebyshev, degree 1 | — | 182 | 182 | 1.00× | 18.9 | 97 | identical to block-Jacobi |
+| Chebyshev, degree 3 | — | 135 | 407 | 2.24× | 24.4 | 125 | 3.7× over |
+| mass-only diagonal | — | never | — | — | — | — | κ 7039 |
+
+Acceptance point 1 counts **iterations**, and there the target *is* met: V(3,3) at
+16 aggregates needs 38, four-level V(2,2) 44, V(2,2) at 16 aggregates 43 and at
+32 aggregates 49. What is not met is the purpose behind it, and the frame column
+shows why. The 33.3 ms of point 2 are **6.18 ms per substep, i.e. 59
+block-Jacobi iteration-equivalents** at 0.104 ms each. Fifty iterations at one
+operator pass each fit into that with room to spare — but the only preconditioner
+in that class is the block diagonal, which needs 182. Every variant that meets the
+iteration bound pays for it in passes per iteration and lands at two to three
+times the frame budget.
+
+The cheapest solve in the table is the one that does not converge: block-Jacobi at
+its 50-iteration budget needs 5.20 ms per substep, converging it needs 18.9 ms.
+The 28.27 ms of today are bought by stopping at a residual of 6.0e-3, so the frame
+target is currently met *because* the solve is not solved. ω = 1.0 diverges
+at V(1,1); damping 0.7 is required, and the asymmetric V-cycle variants (1,2),
+(2,1), (3,1) land on the same pass band (1.56×, 1.56×, 1.45×). The frame column is
+a *lower* bound: it charges the extra fine passes and leaves out the smoothing on
+the coarse levels, which comes on top.
+
+Three measurements were retracted on the way and must not be reused:
+
+* an earlier "κ ≈ 1.3–1.4" came from a broken diagnostic — full
+  reorthogonalisation destroys the three-term recurrence and ≤400 Ritz values
+  only resolve the bulk. Control: Lanczos on a Euclidean-symmetric `A` gave
+  λ_max 1.43e-2 against power iteration's 2.5677e-2.
+* the first two-level and multigrid runs assembled the coarse operator with the
+  edge off-diagonal blocks **positive** (it is `A_ij = −K`) and the bending
+  blocks **without `h²`**. With both fixed and the coarse matrix proven against
+  `R·A·Rᵀ` (3.5e-16 relative, checked before the Cholesky factorisation, which
+  overwrites the matrix), the hierarchy does help iterations — but never passes.
+  `tests/vorkond.rs` keeps that guard, so the mistake cannot come back silently.
+* "deflating the 40 slowest modes lowers κ from 479 to 388" came from the same
+  class of error: that Rayleigh–Ritz run reports its smallest mode at 5.27e-3,
+  while shifted power iteration puts λ_min at 7.4e-4, so it never reached the
+  low end and the "40 slowest modes" were 40 modes out of the bulk. Whether
+  deflation pays on this system is therefore **open**, not measured.
+
+What is left for a next attempt is a change of the operator or of the frame
+structure, not of the diagonal. Three directions the measurements point to, each a
+task of its own: an incomplete Cholesky (needs a factorisation the GPU cannot do
+without atomics); a cheaper iteration rather than fewer iterations, since 0.066 of
+the 0.104 ms per iteration is reductions and vector updates on a single workgroup
+and halving the iteration count is worth less than halving that overhead; and an
+operator that resolves the stiff bending term more directly, given that the
+bending blocks carry the `h²` that makes the spectrum h⁻²-like. What does *not*
+follow from these measurements is a cheaper tolerance: the curve has no fast
+phase to stop in (#41 measured one rate from 10 to 182 iterations).
+
 
 For scale, the reference program measured while running (finding 113, on
 `japanese_school_uniform`): it takes **24 solver steps per second** (a fixed
