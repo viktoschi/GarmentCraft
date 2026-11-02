@@ -82,6 +82,10 @@ pub struct Kante {
     pub k: f64,
     pub richtung: [f64; 3],
     pub quer: f64,
+    /// Rest length: `ruhe = l₀` for a pattern edge, and for a seam the rest
+    /// length it was sewn to (infinite while open, then the current length is
+    /// used). The GPU build needs it, so it travels with the constraint.
+    pub ruhe: f64,
 }
 
 /// Eine Biege-Constraint: die vier Punkte, der Gradient des Diederwinkels und
@@ -91,6 +95,8 @@ pub struct Biegung {
     pub punkte: [u32; 4],
     pub grad: [[f64; 3]; 4],
     pub k: f64,
+    /// Rest angle of the dihedral constraint.
+    pub ruhe: f64,
 }
 
 /// Das lineare System **eines Unterschritts**, in Feldern je Punkt bzw. je
@@ -117,14 +123,32 @@ pub struct System<'a> {
     pub masse: &'a [f64],
     pub w: &'a [f64],
     pub v: &'a [[f64; 3]],
+    /// Positions at build time. Only a backend that builds the geometry itself
+    /// needs them ([`System::ohne_geometrie`]).
+    pub x: &'a [[f64; 3]],
+    /// Gravity (m/s²), for the same reason: the force per point.
+    pub g: [f64; 3],
     pub kanten: Vec<Kante>,
     pub naehte: Vec<Kante>,
     pub biegungen: Vec<Biegung>,
     pub federn: Vec<Feder>,
     /// Rechte Seite `b = h·(f − h·H·v)`.
     pub rhs: Vec<[f64; 3]>,
+    /// Force per point `f` (gravity, damping, constraints, springs). Empty
+    /// when the geometry is built on the device.
+    pub f: Vec<[f64; 3]>,
+    /// Physical load per point (tension only, plus weight), for friction.
+    pub last: Vec<[f64; 3]>,
     /// Inverse der 3×3-Diagonalblöcke von `A` (Block-Jacobi).
     pub pinv: Vec<M3>,
+    /// `true`: this system's geometry is built on the device. Only the topology,
+    /// the stiffnesses and the rest lengths are filled here; `richtung`, `quer`,
+    /// `grad`, `rhs` and `pinv` stay empty and the backend computes them from
+    /// the positions.
+    ///
+    /// Set by the backend, never by a caller - a solver that cannot build on
+    /// its own must not see a half-built system.
+    pub ohne_geometrie: bool,
 }
 
 impl System<'_> {
@@ -243,6 +267,35 @@ pub trait Loeser: std::fmt::Debug {
     /// welche Punkte gehalten werden - nur die *zweite* Lösung tut das.
     fn mal_a_geloest(&mut self, sys: &System<'_>, dv: &[[f64; 3]], out: &mut [[f64; 3]]) {
         self.mal_a(sys, dv, out);
+    }
+
+    /// `true`: this backend builds the constraint geometry, the forces, the
+    /// right-hand side and the preconditioner from the positions itself. The
+    /// caller then only hands over the topology, the stiffnesses and the rest
+    /// lengths ([`System::ohne_geometrie`]) and saves that work.
+    fn baut_selbst(&self) -> bool {
+        false
+    }
+
+    /// The residual `A·Δv − b` for the release pass, under the same condition
+    /// as [`Loeser::mal_a_geloest`]. The release pass reads a held point's
+    /// normal force from it.
+    ///
+    /// The default takes `b` from the system. A backend that builds `b` itself
+    /// ([`Loeser::baut_selbst`]) has it on the device and must override this.
+    fn rest_geloest(&mut self, sys: &System<'_>, dv: &[[f64; 3]], out: &mut [[f64; 3]]) {
+        self.mal_a_geloest(sys, dv, out);
+        for (o, b) in out.iter_mut().zip(&sys.rhs) {
+            *o = sub(*o, *b);
+        }
+    }
+
+    /// The physical load per point (tension only, plus weight) of the system
+    /// this backend built last, for friction with
+    /// [`ImplizitParameter::normalkraft_aus_last`]. Only a backend that builds
+    /// the system itself has it; the default is empty.
+    fn last_lesen(&mut self) -> Vec<[f64; 3]> {
+        Vec::new()
     }
 }
 
@@ -532,10 +585,9 @@ impl ImplizitCg {
     /// compares CPU and GPU operator.
     pub fn operator(&mut self, s: &mut Szene, p: &[[f64; 3]]) -> Vec<[f64; 3]> {
         let h = s.param.bild_dt / self.param.schritte_je_bild.max(1) as f64;
-        let (sys, fest, _) = self.system_bauen(s, h);
+        let (sys, _) = self.system_bauen(s, h);
         let mut out = vec![[0.0; 3]; p.len()];
         self.loeser.mal_a(&sys, p, &mut out);
-        let _ = fest;
         out
     }
 
@@ -557,7 +609,7 @@ impl ImplizitCg {
     /// Kept apart from the rest of the step so the operator can be applied
     /// without running one ([`Self::operator`]); that is how the two backends
     /// are compared, on the same construction.
-    fn system_bauen<'a>(&mut self, s: &'a mut Szene, h: f64) -> (System<'a>, Vec<Option<Fest>>, Vec<[f64; 3]>) {
+    fn system_bauen<'a>(&mut self, s: &'a mut Szene, h: f64) -> (System<'a>, Vec<Option<Fest>>) {
         let n = s.x.len();
         let g = s.param.schwerkraft;
         let c = s.param.daempfung;
@@ -606,16 +658,31 @@ impl ImplizitCg {
 
         // Kanten: Steifigkeit, Richtung, Querfaktor; Kräfte. Daneben die
         // physikalische Last (nur Zug, plus Gewicht) für die Reibung.
-        let mut f: Vec<[f64; 3]> = (0..n).map(|i| sub(mul(g, s.masse[i]), mul(s.v[i], c * s.masse[i]))).collect();
-        let mut last: Vec<[f64; 3]> = (0..n).map(|i| mul(g, s.masse[i])).collect();
+        //
+        // `nur_topologie`: the device computes direction, cross factor, forces,
+        // `diag` and the right-hand side itself, so only what does not follow
+        // from the positions is filled in here. Springs (glue zones,
+        // self-collision) are not built on the device; a step that has them is
+        // built here in full and solved by the CPU backend.
+        let nur_topologie = self.loeser.baut_selbst() && self.federn.is_empty();
+        let mut f: Vec<[f64; 3]> = Vec::new();
+        let mut last: Vec<[f64; 3]> = Vec::new();
+        if !nur_topologie {
+            f = (0..n).map(|i| sub(mul(g, s.masse[i]), mul(s.v[i], c * s.masse[i]))).collect();
+            last = (0..n).map(|i| mul(g, s.masse[i])).collect();
+        }
         let mut kanten = Vec::with_capacity(s.abstand.len());
         for (e, &[i, j]) in s.abstand.punkte.iter().enumerate() {
             let (i, j) = (i as usize, j as usize);
             let k = 1.0 / s.abstand.nachgiebigkeit[e];
+            let l0 = s.abstand.ruhe[e];
+            if nur_topologie {
+                kanten.push(Kante { i: i as u32, j: j as u32, k, richtung: [0.0; 3], quer: 0.0, ruhe: l0 });
+                continue;
+            }
             let d = sub(s.x[j], s.x[i]);
             let l = norm(d).max(1e-12);
             let nr = mul(d, 1.0 / l);
-            let l0 = s.abstand.ruhe[e];
             let fi = mul(nr, k * (l - l0));
             f[i] = add(f[i], fi);
             f[j] = sub(f[j], fi);
@@ -623,37 +690,56 @@ impl ImplizitCg {
                 last[i] = add(last[i], fi);
                 last[j] = sub(last[j], fi);
             }
-            kanten.push(Kante { i: i as u32, j: j as u32, k, richtung: nr, quer: (1.0 - l0 / l).max(0.0) });
+            kanten.push(Kante { i: i as u32, j: j as u32, k, richtung: nr, quer: (1.0 - l0 / l).max(0.0), ruhe: l0 });
         }
         let mut naehte = Vec::with_capacity(s.naht.len());
         for (e, &[i, j]) in s.naht.punkte.iter().enumerate() {
             let (i, j) = (i as usize, j as usize);
+            // Offen (unendlich, vor dem ersten Kürzen): Ruhelänge = Abstand.
+            let l0 = s.naht.ruhe[e];
+            if nur_topologie {
+                naehte.push(Kante { i: i as u32, j: j as u32, k: self.param.naht_k, richtung: [0.0; 3], quer: 0.0, ruhe: l0 });
+                continue;
+            }
             let d = sub(s.x[j], s.x[i]);
             let l = norm(d);
-            // Offen (unendlich, vor dem ersten Kürzen): Ruhelänge = Abstand.
-            let l0 = if s.naht.ruhe[e].is_finite() { s.naht.ruhe[e] } else { l };
+            let l0 = if l0.is_finite() { l0 } else { l };
             let fi = if l0 > 0.0 && l > 1e-12 { mul(d, self.param.naht_k * (l - l0) / l) } else { mul(d, self.param.naht_k) };
             f[i] = add(f[i], fi);
             f[j] = sub(f[j], fi);
             // Richtung und Querfaktor wie bei den Kanten; Länge 0: k·I.
             let (richtung, quer) = if l0 > 0.0 && l > 1e-12 { (mul(d, 1.0 / l), (1.0 - l0 / l).max(0.0)) } else { ([0.0; 3], 1.0) };
-            naehte.push(Kante { i: i as u32, j: j as u32, k: self.param.naht_k, richtung, quer });
+            naehte.push(Kante { i: i as u32, j: j as u32, k: self.param.naht_k, richtung, quer, ruhe: l0 });
         }
         // Biegung: Kraft und Gauß-Newton-Glied (Gradienten merken).
         let mut biegungen = Vec::with_capacity(s.biegung.len());
         for (b, p) in s.biegung.punkte.iter().enumerate() {
             let idx = p.map(|i| i as usize);
-            let Some((theta, gr)) = dieder(idx.map(|i| s.x[i])) else { continue };
             let k = 1.0 / s.biegung.nachgiebigkeit[b];
-            for m in 0..4 {
-                f[idx[m]] = sub(f[idx[m]], mul(gr[m], k * (theta - s.biegung.ruhe[b])));
+            let ruhe = s.biegung.ruhe[b];
+            let theta = if nur_topologie { None } else { dieder(idx.map(|i| s.x[i])) };
+            let (theta, gr) = match theta {
+                Some((t, gr)) => (t, gr),
+                // Degenerate four points (zero area or zero edge): the angle
+                // does not exist, so the constraint has no stiffness. It stays
+                // in the list with k = 0 instead of being dropped - a backend
+                // that builds on the device has to keep the same list, or every
+                // index behind it shifts.
+                None => (0.0, [[0.0; 3]; 4]),
+            };
+            if !nur_topologie {
+                for m in 0..4 {
+                    f[idx[m]] = sub(f[idx[m]], mul(gr[m], k * (theta - ruhe)));
+                }
             }
-            biegungen.push(Biegung { punkte: *p, grad: gr, k });
+            biegungen.push(Biegung { punkte: *p, grad: gr, k, ruhe });
         }
-        for fe in &self.federn {
-            for q in 0..5 {
-                let i = fe.punkte[q] as usize;
-                f[i] = add(f[i], mul(fe.kraft, fe.gewichte[q]));
+        if !nur_topologie {
+            for fe in &self.federn {
+                for q in 0..5 {
+                    let i = fe.punkte[q] as usize;
+                    f[i] = add(f[i], mul(fe.kraft, fe.gewichte[q]));
+                }
             }
         }
         // Das System dieses Unterschritts. Federn der Selbstkollision und der
@@ -666,21 +752,21 @@ impl ImplizitCg {
             masse: &s.masse,
             w: &s.w,
             v: &s.v,
+            x: &s.x,
+            g,
             kanten,
             naehte,
             biegungen,
             federn: std::mem::take(&mut self.federn),
             rhs: Vec::new(),
+            f: Vec::new(),
+            last: Vec::new(),
             pinv: Vec::new(),
+            ohne_geometrie: nur_topologie,
         };
-        // b = h·(f − h·H·v)
-        let mut hv = vec![[0.0; 3]; n];
-        sys.mal_h(&s.v, &mut hv);
-        sys.rhs = (0..n).map(|i| mul(sub(f[i], mul(hv[i], h)), h)).collect();
-        // Diagonalblöcke von A für den Vorkonditionierer.
-        sys.pinv = sys.diag().iter().map(m3_inv).collect();
-
         // Kontakte: festlegen, lösen, ziehende freigeben, noch einmal lösen.
+        // A contact is a query against the body's velocity, so it is asked here
+        // even for a backend that builds everything else itself.
         let mut fest: Vec<Option<Fest>> = vec![None; n];
         for i in 0..n {
             if s.w[i] <= 0.0 {
@@ -693,7 +779,18 @@ impl ImplizitCg {
                 }
             }
         }
-        (sys, fest, last)
+        if nur_topologie {
+            return (sys, fest);
+        }
+        // b = h·(f − h·H·v)
+        let mut hv = vec![[0.0; 3]; n];
+        sys.mal_h(&s.v, &mut hv);
+        sys.rhs = (0..n).map(|i| mul(sub(f[i], mul(hv[i], h)), h)).collect();
+        sys.f = f;
+        sys.last = last;
+        // Diagonalblöcke von A für den Vorkonditionierer.
+        sys.pinv = sys.diag().iter().map(m3_inv).collect();
+        (sys, fest)
     }
 
     /// Ein Zeitschritt der Länge `h`.
@@ -702,7 +799,7 @@ impl ImplizitCg {
         let g = s.param.schwerkraft;
         // Der Weg vor dem Schritt, für die Stoßprüfung der Selbstkollision.
         let x_anfang = if self.param.selbstkollision { s.x.clone() } else { Vec::new() };
-        let (sys, mut fest, last) = self.system_bauen(s, h);
+        let (mut sys, mut fest) = self.system_bauen(s, h);
         // Warmstart: Δv des vorigen Schritts, beim ersten Schritt h·g.
         let mut dv = if self.dv_vorher.len() == n { self.dv_vorher.clone() } else { vec![mul(g, h); n] };
         let mut fn_kraft = vec![0.0; n];
@@ -723,13 +820,12 @@ impl ImplizitCg {
                 break;
             }
             // Normalkraft aus dem Rest r = A·Δv − b (in Normalrichtung) / h.
-            let mut adv = vec![[0.0; 3]; n];
-            self.loeser.mal_a_geloest(&sys, &dv, &mut adv);
+            let mut rest = vec![[0.0; 3]; n];
+            self.loeser.rest_geloest(&sys, &dv, &mut rest);
             let mut frei = false;
             for i in 0..n {
                 if let Some(fe) = fest[i] {
-                    let r = sub(adv[i], sys.rhs[i]);
-                    let fn_i = dot(r, fe.normale) / h;
+                    let fn_i = dot(rest[i], fe.normale) / h;
                     if fn_i < 0.0 {
                         fest[i] = None;
                         frei = true;
@@ -745,6 +841,16 @@ impl ImplizitCg {
         }
 
         self.dv_vorher.clone_from(&dv);
+        // The load for friction: from the system, or from the device that
+        // built it. Read back only when it is used.
+        let last = if !sys.ohne_geometrie {
+            std::mem::take(&mut sys.last)
+        } else if self.param.normalkraft_aus_last {
+            self.loeser.last_lesen()
+        } else {
+            Vec::new()
+        };
+        drop(sys);
         // Neue Geschwindigkeit, Reibung, Lage.
         for i in 0..n {
             if s.w[i] <= 0.0 {

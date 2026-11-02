@@ -4,7 +4,9 @@
 //! asks for: at least 100 solves after a warm-up, same `cg_max`, same
 //! tolerance. On top of that the GPU solve is split into upload and solve, and
 //! the cost of a single operator pass is measured, so an optimisation has a
-//! target instead of a guess.
+//! target instead of a guess. Since task #36 it also reports the system build:
+//! its passes on the device and what the CPU still does per substep (the full
+//! build for the CPU backend, only the topology for the GPU backend).
 //!
 //! Without an adapter it prints `übersprungen: kein GPU-Adapter` and measures
 //! the CPU only.
@@ -30,6 +32,8 @@ use klon3d_sim::{
 const LOESUNGEN: usize = 120;
 /// Whole frames for the end-to-end number.
 const BILDER: usize = 20;
+/// System builds for the CPU share per substep.
+const AUFBAUTEN: usize = 50;
 
 /// The same start vector every time: the solve has to do the same work.
 fn start(n: usize) -> Vec<[f64; 3]> {
@@ -120,12 +124,33 @@ fn vermessen(name: &str, mut s: Szene, gpu: Option<GpuLoeser>) {
         // Can a solve spread over the whole grid? That needs many passes with
         // a global barrier between them, so a pass has to be cheap.
         let p = start(n);
-        for (art, name) in [(0u32, "leer"), (1, "A·p 1 WG"), (2, "A·p breit")] {
+        for (art, name) in [(0u32, "leer"), (1, "A·p 1 WG"), (2, "A·p breit"), (3, "Aufbau")] {
             let d = g.takt_paesse(&sys, &p, 64, art);
             println!("  64 Pässe           {name:<9} {d:.4} ms je Pass");
         }
     }
     drop(sys);
+
+    // What the CPU still does per substep to hand a system over: the full build
+    // for the CPU backend, the topology only for a backend that builds on the
+    // device (task #36).
+    let aufbau = |rw: &mut ImplizitCg, s: &mut Szene| {
+        for _ in 0..3 {
+            rw.system_fuer(s);
+        }
+        let t0 = Instant::now();
+        for _ in 0..AUFBAUTEN {
+            rw.system_fuer(s);
+        }
+        t0.elapsed().as_secs_f64() * 1e3 / AUFBAUTEN as f64
+    };
+    let voll = aufbau(&mut cpu_rw, &mut s.clone());
+    println!("  Systemaufbau CPU   voll      {voll:.3} ms je Unterschritt");
+    if let Ok(g) = GpuLoeser::neu() {
+        let mut rw = ImplizitCg::mit_loeser(param, Box::new(g));
+        let topo = aufbau(&mut rw, &mut s.clone());
+        println!("  Systemaufbau CPU   Topologie {topo:.3} ms je Unterschritt");
+    }
 
     // Whole frames, from the same state, so the end-to-end effect is visible
     // and not only the solve in isolation.
