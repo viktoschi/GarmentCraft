@@ -1,0 +1,21 @@
+[package]
+name = "klon3d-app"
+description = "Anwendungsfenster (Stufe 6): Muster laden, prüfen, später simulieren"
+version.workspace = true
+edition.workspace = true
+# Rust 1.99: the workspace's klon3d-pattern does not build with 1.97 (an elided lifetime in an
+# associated const, geom.rs), and 1.99 is what the main machine and CI use. eframe 0.37 alone would
+# need 1.95.
+rust-version = "1.99"
+license.workspace = true
+
+[dependencies]
+klon3d-pattern = { path = "../klon3d-pattern" }
+eframe = { version = "0.37", default-features = false, features = ["accesskit", "default_fonts", "persistence", "wgpu_no_default_features", "x11", "wayland"] }
+wgpu = { version = "30", default-features = false, features = ["std", "parking_lot", "dx12", "gles", "vulkan", "wgsl"] }
+
+[dev-dependencies]
+# `wgpu` is for `examples/bildschirmfoto.rs` (renders to a PNG); the tests themselves need only
+# `eframe`. One entry, because two entries for the same crate unify their features anyway.
+egui_kittest = { version = "0.37", features = ["eframe", "wgpu"] }
+image = { version = "0.25", default-features = false, features = ["png"] }

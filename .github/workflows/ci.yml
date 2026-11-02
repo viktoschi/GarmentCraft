@@ -59,7 +59,7 @@ jobs:
   viewer:
     name: Build viewer (Windows)
     runs-on: windows-latest
-    timeout-minutes: 30
+    timeout-minutes: 45
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - uses: dtolnay/rust-toolchain@683b588c487a69d01f6c6ddf40f036ff682cc2c8 # master
@@ -68,3 +68,9 @@ jobs:
       - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2
       - name: Build
         run: cargo build --locked -p klon3d-view
+      # The application window (eframe/wgpu, DX12 on Windows). Its tests need no GPU and are the
+      # only ones that run the Windows code of the file dialog (drive letters, hidden entries).
+      - name: Build app
+        run: cargo build --locked -p klon3d-app --all-targets
+      - name: Test app
+        run: cargo test --locked -p klon3d-app --no-fail-fast

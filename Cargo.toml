@@ -6,7 +6,8 @@ members = [
     "crates/klon3d-view",
     "crates/klon3d-koerper",
     "crates/klon3d-mesh",
-    "crates/klon3d-sim"
+    "crates/klon3d-sim",
+    "crates/klon3d-app"
 ]
 
 [workspace.package]
