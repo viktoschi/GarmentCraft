@@ -42,6 +42,14 @@ folder), in 4 of 4 cases.
 | Circumference measurement on the mesh | `crates\klon3d-koerper\src\lib.rs` | section loop, 4 tests green |
 | 2D pattern viewer | `crates\klon3d-view`, `klon3d-fenster.exe` | Win32 + GDI, PNG output — **diagnostic tool**, not stage 6 |
 
+**Other open-source projects compared** (findings 107, 114, as of 2026-10-30):
+ClothCraft (MIT) is the most complete editor but has no friction, no layers,
+no body from measurements and no animation; held only by tension, the skirt v36
+slides off without a waistband and sinks 17–24 mm in 10 s with one (klon3d:
+−0.2 mm). EXO Sample 3D is a GPL build on a modified ClothCraft, not a solver
+of its own. Neither claims parity with CLO; klon3d stays, because Seamly2D
+patterns, a body from measurements and friction are what latex needs.
+
 **No longer needed:** rebuilding the MakeHuman body. Blender is used once as a
 data source (exporting the base body); after that it is out of the picture.
 
@@ -199,6 +207,23 @@ length fractions are matched to each other. **Notches do not occur in the seam m
 Auto-Sewing pairs via piece types and edge types on the avatar
 (finding 71).
 
+What the reference version adds to that model:
+
+- **Fraction = chord length** (finding 93): a line is sampled into a polyline,
+  and the fraction along it is the normalised cumulative chord length of that
+  polyline (0 at the start, 1 at the end). A "partial stretch of an edge" is a
+  pair (line, fraction), not a new line.
+- **Edge length** (finding 110): the sum of its segment lengths; a replaced
+  length exists only after merging two edges. The length thresholds of the
+  Auto-Sewing labelling rules (100 / 300 / 1000) are millimetres.
+- **Edge divider** (finding 111): to match a target length, the run of segments
+  with the smallest deviation (below 10) is searched and the edge is split
+  into at most three pieces — the model for partial stretches below.
+- **DXF import** (finding 97): the split into lines follows the point type, not
+  the layer — two consecutive segment points make a straight line, each run of
+  curve points between two segment points exactly one curve line; every DXF
+  piece is built closed. That is what `klon3d dxf` has to write for CLO.
+
 **Older version, backup only (finding 19):** pairing via notches as `alpha`
 with the thresholds 0.1 and 0.03 - no longer present in the reference
 version (finding 60).
@@ -212,6 +237,17 @@ points ≤ 2 mm. **Passed:** 28 pieces, 6,471 points, 10,734 triangles,
 smallest angle 25.1°, median of the inner edges 9.9 mm, 24 seams with 715
 point pairs, largest offset 0.25 mm (N02), 34 ms. In the pattern collection (6,193 pieces)
 every piece passes.
+
+**Mesh fineness from fabric and seams** (finding 122): Zhang et al., SIGGRAPH
+2025, estimate the edge length before the simulation from bending over
+stretch stiffness (`c₁r⁶ + c₂r⁴ = B/E`) and refine near seams with ease (only
+the longer side), folds and gathers. For latex that gives **6.8 mm**
+(Radical Rubber 0.4 mm) and **5.5 mm** (Retifist NR 0.40) where klon3d meshes
+a fixed 10 mm. CLO users do the same by hand per piece: 90.7 % of the
+triangles in the 47 public projects have particle distance 5, and CLO's mean
+edge is 0.807 × the particle distance — klon3d's 10 mm corresponds to a
+particle distance of about 12, not 10. The constants are a calibration to
+Style3D's solver; the form of the rule carries over, the numbers do not.
 
 **Still missing:** seam springs on the point pairs, partial stretches of an edge
 (CLO's Free Sewing), internal shapes (holes, internal lines) and
@@ -375,6 +411,15 @@ falls geometrically by ~0.95 per iteration after the first drop (1.7e-2 at 30,
 number of ~1500 and no plateau, so deflating a few vectors does not help; a
 two-level or multigrid preconditioner would.
 
+For scale, the reference program measured while running (finding 113, on
+`japanese_school_uniform`): it takes **24 solver steps per second** (a fixed
+step of 1/24 s, 41 ms apart, stable to 1.7 % over three runs) and draws two
+frames per step; about **336 GPU dispatches per step**, the CG iterations
+running inside a single dispatch rather than one dispatch each; the GPU at
+57–60 % and 12–17 CPU cores busy with driving it. So it does not run at 30
+steps per second either, and the iteration count per step cannot be read from
+the dispatches.
+
 What is proven (tests, `cargo test --release -p klon3d-sim --test gpu`, all
 green on the RTX 3090, and skipped without an adapter):
 
@@ -408,6 +453,19 @@ pass reads `A·Δv − b` from the device;
 springs of glue zones and self-collision go to the CPU backend and are counted
 (`GpuLoeser::ausweichungen`) instead of being dropped; self-collision is not on
 the GPU; nothing is claimed about bodies at height or moving bodies.
+
+**Other solvers on the same scenes** (finding 109, klon3d as of finding 102,
+same scene, start pose, phases and measuring scripts, three runs each): the
+PPF contact solver (ZOZO, Apache-2.0) and ClothCraft dress Bluse3 v2 and skirt
+v36 **without a single penetration** and with 100 % of the seams closed, while
+klon3d let cloth through the body (6,436 / 1,061 triangle pairs) and through
+itself (413 / 1,036 pairs away from seams). klon3d held most steadily (0.0 /
+0.35 mm in 10 s; PPF 0.02 / 1.7 mm; ClothCraft without friction lost the
+skirt). Cost per simulated second: ClothCraft 2.1 / 1.5 s, klon3d on one CPU
+thread 4.7 / 11.6 s, PPF 25.6 / 27.3 s; klon3d and ClothCraft repeat
+bit-identically, PPF does not (end poses up to 54 / 142 mm apart). The
+penetrations are the open contact work of stages 4 and 7 (cloth against body
+vertex, self-collision on the GPU).
 
 | Constant | Meaning |
 |---|---|
