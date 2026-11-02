@@ -30,7 +30,10 @@ impl App {
                 self.dateiwahl = None;
                 self.datei_annehmen(zweck, p);
             }
-            Some(Antwort::Abbruch) => self.dateiwahl = None,
+            Some(Antwort::Abbruch) => {
+                self.dateiwahl = None;
+                self.nahtvorschlag = None;
+            }
             None => {}
         }
     }

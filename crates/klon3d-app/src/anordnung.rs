@@ -184,6 +184,10 @@ pub struct Anzeige2d {
     pub laengen: bool,
     pub teilnamen: bool,
     pub massstab: bool,
+    /// Grainline of every piece (as Seamly2D draws it).
+    pub fadenlauf: bool,
+    /// Notches as short ticks across the outline.
+    pub passzeichen: bool,
 }
 
 impl Default for Anzeige2d {
@@ -193,19 +197,23 @@ impl Default for Anzeige2d {
             laengen: false,
             teilnamen: true,
             massstab: true,
+            fadenlauf: true,
+            passzeichen: true,
         }
     }
 }
 
 impl Anzeige2d {
-    /// `naehte=1;laengen=0;teilnamen=1;massstab=1`
+    /// `naehte=1;laengen=0;teilnamen=1;massstab=1;fadenlauf=1;passzeichen=1`
     pub fn als_text(&self) -> String {
         format!(
-            "naehte={};laengen={};teilnamen={};massstab={}",
+            "naehte={};laengen={};teilnamen={};massstab={};fadenlauf={};passzeichen={}",
             u8::from(self.naehte),
             u8::from(self.laengen),
             u8::from(self.teilnamen),
-            u8::from(self.massstab)
+            u8::from(self.massstab),
+            u8::from(self.fadenlauf),
+            u8::from(self.passzeichen)
         )
     }
 
@@ -222,6 +230,8 @@ impl Anzeige2d {
                 "laengen" => a.laengen = an,
                 "teilnamen" => a.teilnamen = an,
                 "massstab" => a.massstab = an,
+                "fadenlauf" => a.fadenlauf = an,
+                "passzeichen" => a.passzeichen = an,
                 _ => {}
             }
         }
@@ -451,6 +461,26 @@ mod tests {
         let z = Anzeige2d::aus_text(" laengen = 1 ;massstab=0");
         assert!(z.laengen && !z.massstab && z.naehte && z.teilnamen);
         assert_eq!(Anzeige2d::aus_text(&z.als_text()), z);
+    }
+
+    #[test]
+    fn fadenlauf_und_passzeichen_gespeichert() {
+        // A text written before both toggles existed switches both on.
+        let alt = Anzeige2d::aus_text("naehte=1;laengen=0;teilnamen=1;massstab=1");
+        assert!(alt.fadenlauf && alt.passzeichen);
+        for (f, p) in [(false, false), (false, true), (true, false), (true, true)] {
+            let a = Anzeige2d {
+                fadenlauf: f,
+                passzeichen: p,
+                ..Anzeige2d::default()
+            };
+            let text = a.als_text();
+            assert!(
+                text.contains(&format!("fadenlauf={}", u8::from(f))),
+                "{text}"
+            );
+            assert_eq!(Anzeige2d::aus_text(&text), a);
+        }
     }
 
     #[test]

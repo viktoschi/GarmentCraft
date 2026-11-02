@@ -30,13 +30,19 @@
 //! window is narrow. With "Längen" on, every boundary edge of the selected piece – of all pieces
 //! when none is selected – carries its length in cm at its middle ([`halbweg`]), on a backdrop; an
 //! edge shorter on screen than its text gets none, nor does one whose label would cover a name or
-//! another length, so the labels never pile up – zooming in shows the rest.
+//! another length, so the labels never pile up - zooming in shows the rest.
+//!
+//! With "Fadenlauf" on, every piece with a grainline Seamly2D draws shows it as a line with its
+//! arrow heads ([`pfeilspitzen`], Seamly2D's `arrows`: 0 both ends, 1 top, 2 bottom); a grainline
+//! that cannot be evaluated draws nothing and says why in the piece's hover text. With
+//! "Passzeichen" on, every notch is a short tick across the outline ([`passzeichen`]).
 
 use std::sync::Arc;
 
 use eframe::egui;
 use egui::{Align2, Color32, FontId, Galley, Mesh, Pos2, Rect, Sense, Shape, Stroke, Vec2};
 use klon3d_pattern::geom::Pt;
+use klon3d_pattern::kanten::Teilrand;
 
 use crate::anordnung::Anzeige2d;
 use crate::muster::{Huelle, Kantenart, Muster, Teil};
@@ -52,6 +58,15 @@ pub const AUSWAHL_BREITE: f32 = 6.0;
 
 /// Longest scale bar in screen points.
 pub const MASSSTAB_MAX_PX: f64 = 160.0;
+
+/// Half the opening of a grainline arrow head: 20 degrees, as Seamly2D draws it.
+const PFEIL_WINKEL: f64 = std::f64::consts::PI / 9.0;
+
+/// Side length of a grainline arrow head, in screen points.
+const PFEIL_PX: f64 = 9.0;
+
+/// Length of a notch tick across the outline, in screen points (half on each side).
+const PASSZEICHEN_PX: f64 = 10.0;
 
 /// Gap in screen points between the top of the selected piece and its name placed above it:
 /// clear of the selection band and of a length label on a top edge.
@@ -202,6 +217,70 @@ pub fn linienlaenge(punkte: &[Pt]) -> f64 {
     punkte.windows(2).map(|s| s[0].dist(s[1])).sum()
 }
 
+/// Arrow heads of a grainline from `p1` to `p2` with Seamly2D's `arrows` value (0 both ends, 1
+/// only at `p2`, 2 only at `p1`; anything else none). Each head is `[left, tip, right]`, its sides
+/// `laenge` long and 20 degrees off the axis, as Seamly2D draws them. Works in any frame with a
+/// uniform scale (world or screen); `None` without length.
+pub fn pfeilspitzen(p1: Pt, p2: Pt, pfeile: u8, laenge: f64) -> Option<Vec<[Pt; 3]>> {
+    let l = p1.dist(p2);
+    if !(l > 0.0) {
+        return None;
+    }
+    let (dx, dy) = ((p2.x - p1.x) / l, (p2.y - p1.y) / l);
+    let (cos, sin) = (PFEIL_WINKEL.cos(), PFEIL_WINKEL.sin());
+    // Head at `spitze` pointing along (ux, uy): both sides run back from the tip, the backward
+    // direction turned by +/- the head angle.
+    let kopf = |spitze: Pt, ux: f64, uy: f64| {
+        let seite = |sin: f64| {
+            let (bx, by) = (-ux * cos + uy * sin, -ux * sin - uy * cos);
+            Pt::new(spitze.x + bx * laenge, spitze.y + by * laenge)
+        };
+        [seite(sin), spitze, seite(-sin)]
+    };
+    Some(match pfeile {
+        0 => vec![kopf(p2, dx, dy), kopf(p1, -dx, -dy)],
+        1 => vec![kopf(p2, dx, dy)],
+        2 => vec![kopf(p1, -dx, -dy)],
+        _ => Vec::new(),
+    })
+}
+
+/// Notches of a piece: for every point node with `notch="true"` its place on the seam line and
+/// the unit normal of the outline there (the mean direction of the neighbouring segments turned
+/// by 90 degrees); a node whose neighbours coincide with it is left out.
+pub fn passzeichen(rand: &Teilrand) -> Vec<(Pt, Pt)> {
+    let u = &rand.umriss;
+    let n = u.len();
+    let mut out = Vec::new();
+    if n < 3 {
+        return out;
+    }
+    for k in rand.punktknoten.iter().filter(|k| k.kerbe) {
+        let i = k.stelle % n;
+        let p = u[i];
+        // The nearest distinct neighbours on both sides.
+        let nachbar = |schritt: isize| {
+            (1..n as isize)
+                .map(|j| u[((i as isize + schritt * j).rem_euclid(n as isize)) as usize])
+                .find(|q| q.dist(p) > 1e-9)
+        };
+        let (Some(a), Some(b)) = (nachbar(-1), nachbar(1)) else {
+            continue;
+        };
+        let einheit = |q: Pt, r: Pt| {
+            let l = q.dist(r);
+            ((r.x - q.x) / l, (r.y - q.y) / l)
+        };
+        let (d1, d2) = (einheit(a, p), einheit(p, b));
+        let (tx, ty) = (d1.0 + d2.0, d1.1 + d2.1);
+        let lt = (tx * tx + ty * ty).sqrt();
+        // A full reversal has no tangent; take the incoming segment then.
+        let (tx, ty) = if lt > 1e-9 { (tx / lt, ty / lt) } else { d1 };
+        out.push((p, Pt::new(-ty, tx)));
+    }
+    out
+}
+
 /// An edge length in the view: cm with one decimal and a German decimal comma ("12,3").
 pub fn laenge_text(cm: f64) -> String {
     format!("{cm:.1}").replace('.', ",")
@@ -298,6 +377,8 @@ struct Farben {
     doppelt: Color32,
     naht_gewaehlt: Color32,
     text: Color32,
+    fadenlauf: Color32,
+    passzeichen: Color32,
 }
 
 impl Farben {
@@ -315,6 +396,8 @@ impl Farben {
                 doppelt: v.error_fg_color,
                 naht_gewaehlt: Color32::from_rgb(255, 225, 90),
                 text: v.strong_text_color(),
+                fadenlauf: Color32::from_rgb(220, 150, 230),
+                passzeichen: Color32::from_rgb(240, 240, 240),
             }
         } else {
             let sel = v.selection.bg_fill;
@@ -328,6 +411,8 @@ impl Farben {
                 doppelt: v.error_fg_color,
                 naht_gewaehlt: Color32::from_rgb(175, 110, 0),
                 text: v.strong_text_color(),
+                fadenlauf: Color32::from_rgb(140, 40, 150),
+                passzeichen: Color32::from_rgb(20, 20, 20),
             }
         }
     }
@@ -417,14 +502,28 @@ impl Ansicht2d {
         }
         self.sicht = Some(sicht);
         // The piece under the pointer names itself – also where its name does not fit into it.
-        if self.anzeige.teilnamen && !resp.dragged() {
+        // A grainline that cannot be evaluated says why in the same hover text.
+        if (self.anzeige.teilnamen || self.anzeige.fadenlauf) && !resp.dragged() {
             if let Some(maus) = resp.hover_pos() {
                 let m = maus - rect.min;
                 let welt = sicht.zu_welt(m.x as f64, m.y as f64);
                 if let Some(t) =
                     treffer(&muster.teile, welt, self.ausgelegt).map(|i| &muster.teile[i])
                 {
-                    resp.clone().on_hover_text_at_pointer(&t.kurz);
+                    let mut zeilen = Vec::new();
+                    if self.anzeige.teilnamen {
+                        zeilen.push(t.kurz.clone());
+                    }
+                    if let Some(e) = t
+                        .fadenlauf_fehler
+                        .as_ref()
+                        .filter(|_| self.anzeige.fadenlauf)
+                    {
+                        zeilen.push(format!("Fadenlauf nicht auswertbar: {e}"));
+                    }
+                    if !zeilen.is_empty() {
+                        resp.clone().on_hover_text_at_pointer(zeilen.join("\n"));
+                    }
                 }
             }
         }
@@ -503,6 +602,44 @@ impl Ansicht2d {
                 };
                 let punkte: Vec<Pos2> = kante.punkte.iter().map(|&p| bild(p, v)).collect();
                 painter.add(Shape::line(punkte, strich));
+            }
+        }
+
+        // Notches across the outline, grainlines inside the pieces.
+        let zu_pt = |p: Pos2| Pt::new(p.x as f64, p.y as f64);
+        let zu_pos = |p: Pt| Pos2::new(p.x as f32, p.y as f32);
+        for t in &muster.teile {
+            let v = t.versatz(self.ausgelegt);
+            if !auf_schirm(t, v) {
+                continue;
+            }
+            if self.anzeige.passzeichen {
+                if let Ok(rand) = &t.rand {
+                    for (p, n) in passzeichen(rand) {
+                        let mitte = bild(p, v);
+                        let h = (PASSZEICHEN_PX / 2.0) as f32;
+                        let d = Vec2::new(n.x as f32, n.y as f32) * h;
+                        painter.line_segment(
+                            [mitte - d, mitte + d],
+                            Stroke::new(2.0, farben.passzeichen),
+                        );
+                    }
+                }
+            }
+            if self.anzeige.fadenlauf {
+                if let Some((p1, p2, pfeile)) = t.fadenlauf {
+                    let (a, b) = (bild(p1, v), bild(p2, v));
+                    let strich = Stroke::new(1.5, farben.fadenlauf);
+                    painter.line_segment([a, b], strich);
+                    for kopf in
+                        pfeilspitzen(zu_pt(a), zu_pt(b), pfeile, PFEIL_PX).unwrap_or_default()
+                    {
+                        painter.add(Shape::line(
+                            kopf.iter().map(|&p| zu_pos(p)).collect(),
+                            strich,
+                        ));
+                    }
+                }
             }
         }
 
@@ -728,8 +865,68 @@ mod tests {
             umfang_cm: None,
             rand: Err("ohne".into()),
             kanten_naehte: Vec::new(),
+            fadenlauf: None,
+            fadenlauf_fehler: None,
             umriss,
         }
+    }
+
+    #[test]
+    fn pfeilspitzen_nach_seamly() {
+        let (a, b) = (pt(0.0, 0.0), pt(0.0, -10.0));
+        assert!(pfeilspitzen(a, a, 0, 1.0).is_none());
+        assert_eq!(pfeilspitzen(a, b, 0, 1.0).unwrap().len(), 2);
+        assert_eq!(pfeilspitzen(a, b, 7, 1.0).unwrap().len(), 0);
+        // 1: only at p2, sides 20 degrees off the axis, pointing back towards p1.
+        let k = pfeilspitzen(a, b, 1, 2.0).unwrap();
+        assert_eq!(k.len(), 1);
+        let [l, spitze, r] = k[0];
+        assert_eq!(spitze, b);
+        for s in [l, r] {
+            assert!(nah(s.dist(b), 2.0));
+            assert!(nah(s.y - b.y, 2.0 * PFEIL_WINKEL.cos()));
+            assert!(nah(s.x.abs(), 2.0 * PFEIL_WINKEL.sin()));
+        }
+        assert!(l.x * r.x < 0.0, "one side left, one right");
+        // 2: only at p1, pointing away from p2.
+        let k = pfeilspitzen(a, b, 2, 2.0).unwrap();
+        assert_eq!(k[0][1], a);
+        assert!(k[0][0].y < 0.0 && k[0][2].y < 0.0);
+    }
+
+    #[test]
+    fn passzeichen_senkrecht_zum_umriss() {
+        use klon3d_pattern::kanten::{Punktknoten, Teilrand};
+        let knoten = |stelle: usize, kerbe: bool| Punktknoten {
+            name: format!("P{stelle}"),
+            id: stelle.to_string(),
+            knoten_nr: stelle,
+            kerbe,
+            zugabe_vor: None,
+            zugabe_nach: None,
+            stelle,
+        };
+        // A square with a notch in the middle of the bottom edge and one on a corner.
+        let rand = Teilrand {
+            teil: "Q".into(),
+            umriss: vec![
+                pt(0.0, 0.0),
+                pt(5.0, 0.0),
+                pt(10.0, 0.0),
+                pt(10.0, 10.0),
+                pt(0.0, 10.0),
+            ],
+            punktknoten: vec![knoten(0, false), knoten(1, true), knoten(2, true)],
+            kanten: Vec::new(),
+            mm_pro_einheit: 10.0,
+        };
+        let p = passzeichen(&rand);
+        assert_eq!(p.len(), 2);
+        assert_eq!(p[0].0, pt(5.0, 0.0));
+        assert!(nah(p[0].1.x, 0.0) && nah(p[0].1.y.abs(), 1.0));
+        // On the corner the tick halves the angle.
+        let h = std::f64::consts::FRAC_1_SQRT_2;
+        assert!(nah(p[1].1.x.abs(), h) && nah(p[1].1.y.abs(), h));
     }
 
     #[test]

@@ -88,6 +88,18 @@ fn haken(ui: &mut egui::Ui, app: &mut App, text: &str, kuerzel: &str, an: bool, 
     }
 }
 
+/// A checkbox entry for a toggle that shows something of a pattern; enabled only with one.
+fn haken_mit_muster(ui: &mut egui::Ui, app: &mut App, text: &str, an: bool, aktion: Aktion) {
+    let da = app.muster.is_some();
+    let mut zustand = an;
+    let r = ui
+        .add_enabled(da, egui::Checkbox::new(&mut zustand, text))
+        .on_disabled_hover_text(ERST_MUSTER);
+    if r.clicked() {
+        app.aktion(aktion);
+    }
+}
+
 /// A checkbox entry that shows or hides part `b` of the window.
 fn bereich(ui: &mut egui::Ui, app: &mut App, b: Bereich) {
     let an = app.anordnung.sichtbar(b);
@@ -256,6 +268,7 @@ fn schnitt(app: &mut App, ui: &mut egui::Ui) {
             Aktion::NaehteUmschalten,
         );
     });
+    eintrag_mit_muster(ui, app, "Nähte vorschlagen…", "", Aktion::NaehteVorschlagen);
 }
 
 fn anzeige(app: &mut App, ui: &mut egui::Ui) {
@@ -303,6 +316,20 @@ fn anzeige(app: &mut App, ui: &mut egui::Ui) {
             "",
             a.massstab,
             Aktion::MassstabUmschalten,
+        );
+        haken_mit_muster(
+            ui,
+            app,
+            "Fadenlauf",
+            a.fadenlauf,
+            Aktion::FadenlaufUmschalten,
+        );
+        haken_mit_muster(
+            ui,
+            app,
+            "Passzeichen",
+            a.passzeichen,
+            Aktion::PasszeichenUmschalten,
         );
     });
     ui.menu_button("Avatar", |ui| spaeter(ui, "Avatar", ""));
@@ -446,6 +473,30 @@ pub fn werkzeugleiste_2d(app: &mut App, ui: &mut egui::Ui) {
         if ui
             .add(Button::selectable(an, text))
             .on_hover_text(hinweis)
+            .clicked()
+        {
+            app.aktion(aktion);
+        }
+    }
+    let da = app.muster.is_some();
+    for (an, text, hinweis, aktion) in [
+        (
+            a.fadenlauf,
+            "Fadenlauf",
+            "Fadenlauf jedes Teils mit seinen Pfeilen, wie Seamly2D ihn zeichnet",
+            Aktion::FadenlaufUmschalten,
+        ),
+        (
+            a.passzeichen,
+            "Passzeichen",
+            "Passzeichen als kurzer Strich quer zur Nahtlinie",
+            Aktion::PasszeichenUmschalten,
+        ),
+    ] {
+        if ui
+            .add_enabled(da, Button::selectable(an, text))
+            .on_hover_text(hinweis)
+            .on_disabled_hover_text(format!("{hinweis} – {ERST_MUSTER}"))
             .clicked()
         {
             app.aktion(aktion);

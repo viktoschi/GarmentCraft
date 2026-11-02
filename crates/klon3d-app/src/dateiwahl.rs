@@ -10,6 +10,10 @@
 //! library shows the same core docked at the left. The listing and the path handling are plain
 //! functions with unit tests; the `ui` functions only show them.
 //!
+//! In save mode ([`Zweck::speichern`]) the dialog has a file name field as well; a click on a file
+//! puts its name there, the path field only changes the folder, and an existing file is written
+//! only after the user answered "Überschreiben" ([`Dateiwahl::speichern_bestaetigen`]).
+//!
 //! Nothing here touches the disk per frame: the folder is read when it changes, the drive list
 //! once per listing (on Windows from `GetLogicalDrives`, without opening a drive – a disconnected
 //! network drive would block), and only the visible rows of the listing are laid out.
@@ -24,6 +28,8 @@ pub enum Zweck {
     Muster,
     Massdatei,
     Nahtliste,
+    /// Where to write a seam list: the dialog in save mode ([`Zweck::speichern`]).
+    NahtlisteSpeichern,
 }
 
 impl Zweck {
@@ -32,7 +38,7 @@ impl Zweck {
         match self {
             Zweck::Muster => &["sm2d"],
             Zweck::Massdatei => &["smis"],
-            Zweck::Nahtliste => &["naehte"],
+            Zweck::Nahtliste | Zweck::NahtlisteSpeichern => &["naehte"],
         }
     }
 
@@ -42,7 +48,14 @@ impl Zweck {
             Zweck::Muster => "Muster öffnen",
             Zweck::Massdatei => "Maßdatei wählen",
             Zweck::Nahtliste => "Nahtliste wählen",
+            Zweck::NahtlisteSpeichern => "Nahtliste speichern",
         }
+    }
+
+    /// Does the dialog write a file (name field, question before overwriting) instead of
+    /// choosing an existing one?
+    pub fn speichern(self) -> bool {
+        matches!(self, Zweck::NahtlisteSpeichern)
     }
 }
 
@@ -394,6 +407,10 @@ pub struct Dateiwahl {
     pub liste: Verzeichnis,
     /// Text of the path field.
     pub pfad_text: String,
+    /// Save mode: text of the file name field.
+    pub name: String,
+    /// Save mode: the existing file the user is asked about before it is overwritten.
+    pub ueberschreiben: Option<PathBuf>,
 }
 
 impl Dateiwahl {
@@ -405,7 +422,63 @@ impl Dateiwahl {
             zweck,
             liste,
             pfad_text,
+            name: String::new(),
+            ueberschreiben: None,
         }
+    }
+
+    /// Open the dialog in save mode in `ordner` with `name` in the file name field.
+    pub fn zum_speichern(zweck: Zweck, ordner: &Path, name: &str) -> Dateiwahl {
+        let mut d = Dateiwahl::neu(zweck, ordner);
+        d.name = name.to_string();
+        d
+    }
+
+    /// Save mode: the file the name field means, in the folder shown (an absolute name stands
+    /// for itself); without an extension and with the filter on, the first one of the purpose is
+    /// added.
+    pub fn ziel(&self) -> Option<PathBuf> {
+        let name = self.name.trim();
+        if name.is_empty() {
+            return None;
+        }
+        let mut ziel = eingabe_aufloesen(name, &self.liste.ordner);
+        if !self.liste.alle && ziel.extension().is_none() {
+            if let Some(e) = self.zweck.endungen().first() {
+                ziel.set_extension(e);
+            }
+        }
+        Some(bereinigt(&ziel))
+    }
+
+    /// Save mode: the answer for the name field. For an existing file there is none yet: it is
+    /// kept in [`Dateiwahl::ueberschreiben`], the dialog asks, and only
+    /// [`Dateiwahl::ueberschreiben_bestaetigen`] answers with it.
+    pub fn speichern_bestaetigen(&mut self) -> Option<Antwort> {
+        self.ueberschreiben = None;
+        let Some(ziel) = self.ziel() else {
+            self.liste.fehler = Some("Bitte einen Dateinamen angeben".into());
+            return None;
+        };
+        if ziel.is_dir() {
+            self.liste.fehler = Some(format!("{} ist ein Ordner", ziel.display()));
+            return None;
+        }
+        if !ziel.parent().is_some_and(Path::is_dir) {
+            self.liste.fehler = Some(format!("Ordner nicht gefunden: {}", ziel.display()));
+            return None;
+        }
+        self.liste.fehler = None;
+        if ziel.exists() {
+            self.ueberschreiben = Some(ziel);
+            return None;
+        }
+        Some(Antwort::Gewaehlt(ziel))
+    }
+
+    /// Save mode: the user agreed to overwrite the file asked about.
+    pub fn ueberschreiben_bestaetigen(&mut self) -> Option<Antwort> {
+        self.ueberschreiben.take().map(Antwort::Gewaehlt)
     }
 
     /// Show folder `ordner`; on an error the old folder stays and the error is shown.
@@ -515,7 +588,18 @@ impl Dateiwahl {
                         )
                         .labelled_by(l.id);
                     if feld.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter)) {
-                        antwort = self.bestaetigen();
+                        if self.zweck.speichern() {
+                            // Save mode: the path field only changes the folder.
+                            let ziel = eingabe_aufloesen(&self.pfad_text, &self.liste.ordner);
+                            if ziel.is_dir() {
+                                self.wechseln(&ziel);
+                            } else {
+                                self.liste.fehler =
+                                    Some(format!("Ordner nicht gefunden: {}", ziel.display()));
+                            }
+                        } else {
+                            antwort = self.bestaetigen();
+                        }
                     }
                 });
                 if let Some(f) = &self.liste.fehler {
@@ -527,21 +611,74 @@ impl Dateiwahl {
                     ui.weak(self.leer_text());
                 }
                 let hoehe = (ui.available_height() - unten).max(80.0);
+                let speichern = self.zweck.speichern();
+                let hoehe = if speichern {
+                    (hoehe - 2.0 * unten).max(80.0)
+                } else {
+                    hoehe
+                };
                 match self.liste.zeilen(ui, hoehe, |_| false, "") {
                     Some(Zeilenklick::Ordner(p)) => self.wechseln(&p),
+                    Some(Zeilenklick::Doppelt(p)) if speichern => {
+                        self.name = crate::muster::dateiname(&p);
+                        antwort = self.speichern_bestaetigen();
+                    }
                     Some(Zeilenklick::Doppelt(p)) => antwort = Some(Antwort::Gewaehlt(p)),
+                    Some(Zeilenklick::Markiert(p)) if speichern => {
+                        self.name = crate::muster::dateiname(&p);
+                        self.ueberschreiben = None;
+                    }
                     Some(Zeilenklick::Markiert(p)) => self.pfad_text = p.display().to_string(),
                     None => {}
                 }
                 ui.separator();
+                if speichern {
+                    ui.horizontal(|ui| {
+                        let l = ui.label("Dateiname:");
+                        let feld = ui
+                            .add(
+                                egui::TextEdit::singleline(&mut self.name)
+                                    .desired_width(f32::INFINITY),
+                            )
+                            .labelled_by(l.id);
+                        if feld.changed() {
+                            self.ueberschreiben = None;
+                        }
+                        if feld.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter)) {
+                            antwort = self.speichern_bestaetigen();
+                        }
+                    });
+                    if let Some(z) = self.ueberschreiben.clone() {
+                        ui.horizontal(|ui| {
+                            ui.colored_label(
+                                ui.visuals().warn_fg_color,
+                                format!(
+                                    "{} gibt es schon – überschreiben?",
+                                    crate::muster::dateiname(&z)
+                                ),
+                            );
+                            if ui.button("Überschreiben").clicked() {
+                                antwort = self.ueberschreiben_bestaetigen();
+                            }
+                            if ui.button("Nein").clicked() {
+                                self.ueberschreiben = None;
+                            }
+                        });
+                    }
+                }
                 ui.horizontal(|ui| {
-                    // Not just "Öffnen": the toolbar has a button of that name.
+                    // Not just "Öffnen" / "Speichern": the toolbar has buttons of those names.
                     let titel = match self.zweck {
                         Zweck::Muster => "Datei öffnen",
+                        Zweck::NahtlisteSpeichern => "Datei speichern",
                         _ => "Datei wählen",
                     };
                     if ui.button(titel).clicked() {
-                        antwort = self.bestaetigen();
+                        antwort = if speichern {
+                            self.speichern_bestaetigen()
+                        } else {
+                            self.bestaetigen()
+                        };
                     }
                     if ui.button("Abbrechen").clicked() {
                         antwort = Some(Antwort::Abbruch);
@@ -563,6 +700,40 @@ fn zeilenhoehe(ui: &egui::Ui) -> f32 {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn speichern_fragt_vor_dem_ueberschreiben() {
+        let d = ordner("speichern");
+        let mut w = Dateiwahl::zum_speichern(Zweck::NahtlisteSpeichern, &d, "");
+        assert!(w.zweck.speichern() && !Zweck::Nahtliste.speichern());
+        assert_eq!(w.speichern_bestaetigen(), None);
+        assert!(w.liste.fehler.is_some(), "kein Name");
+        // A new name without an extension gets the purpose's one.
+        w.name = "neu".into();
+        assert_eq!(
+            w.speichern_bestaetigen(),
+            Some(Antwort::Gewaehlt(d.join("neu.naehte")))
+        );
+        w.name = "Zweig".into();
+        w.liste.alle = true;
+        assert_eq!(w.speichern_bestaetigen(), None, "ein Ordner");
+        w.liste.alle = false;
+        // An existing file is asked about first and is the answer only after "Überschreiben".
+        w.name = "d.naehte".into();
+        assert_eq!(w.speichern_bestaetigen(), None);
+        assert_eq!(w.ueberschreiben, Some(d.join("d.naehte")));
+        assert_eq!(
+            w.speichern_bestaetigen(),
+            None,
+            "erneut speichern fragt erneut"
+        );
+        assert_eq!(
+            w.ueberschreiben_bestaetigen(),
+            Some(Antwort::Gewaehlt(d.join("d.naehte")))
+        );
+        assert_eq!(w.ueberschreiben_bestaetigen(), None);
+        let _ = std::fs::remove_dir_all(&d);
+    }
 
     /// A fresh folder with a few files and subfolders.
     fn ordner(name: &str) -> PathBuf {

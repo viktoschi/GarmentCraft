@@ -27,6 +27,12 @@
 //! In construction coordinates neighbouring pieces overlap. [`auslegen`] lays them out in rows
 //! without overlap (copied from `klon3d-view`); the view switches between both.
 //!
+//! ## Grainline and seam suggestion
+//!
+//! Every piece keeps its grainline ([`Auswertung::fadenlauf`]) in construction coordinates, or why
+//! it cannot be evaluated. [`naehte_vorschlagen`] reads the pattern again and suggests its seams
+//! as `klon3d naehte --vorschlag` does, as the text of a seam list.
+//!
 //! Nothing here panics on a broken file: errors come back as [`Ladefehler`] with the file name, and a
 //! panic inside the pattern reader is caught and reported the same way. [`Ladefehler::Massdatei`]
 //! marks the errors that another measurement file can cure, so the window can offer to choose one.
@@ -40,6 +46,7 @@ use klon3d_pattern::kanten::{Kurvenquelle, Teilrand};
 use klon3d_pattern::naehte::{
     lies_nahtliste, pruefe_naehte, Nahtbericht, Nahtergebnis, MIN_SEITE_CM, TOLERANZ_CM,
 };
+use klon3d_pattern::vorschlag::nahtliste_text;
 use klon3d_pattern::{read_path, Pattern};
 
 /// Width to height of the layout ([`auslegen`]), roughly a landscape window.
@@ -131,6 +138,13 @@ pub struct Teil {
     pub rand: Result<Teilrand, String>,
     /// For every boundary edge the seams (indices into [`Nahtbericht::naehte`]) that use it.
     pub kanten_naehte: Vec<Vec<usize>>,
+    /// Grainline `(p1, p2, arrows)` in construction coordinates (like `umriss`); `arrows` is
+    /// Seamly2D's value: 0 heads at both ends, 1 only at `p2`, 2 only at `p1` ([`crate::ansicht2d::pfeilspitzen`]).
+    /// `None` when Seamly2D draws none or it
+    /// cannot be evaluated ([`Teil::fadenlauf_fehler`]).
+    pub fadenlauf: Option<(Pt, Pt, u8)>,
+    /// Why the grainline cannot be evaluated.
+    pub fadenlauf_fehler: Option<String>,
 }
 
 impl Teil {
@@ -421,7 +435,13 @@ fn laden_ungeschuetzt(auftrag: &Ladeauftrag) -> Result<Muster, Ladefehler> {
             .map_err(|e| e.to_string());
         let umfang_cm = rand.as_ref().ok().map(|r| r.in_cm(r.umfang()));
         let kanten = rand.as_ref().map(|r| r.kanten.len()).unwrap_or(0);
+        let (fadenlauf, fadenlauf_fehler) = match ev.fadenlauf(p) {
+            Ok(f) => (f.map(|f| (f.p1, f.p2, f.pfeile)), None),
+            Err(e) => (None, Some(e.to_string())),
+        };
         teile.push(Teil {
+            fadenlauf,
+            fadenlauf_fehler,
             schluessel: p.name.clone().unwrap_or_else(|| p.id.clone()),
             name,
             kurz: String::new(),
@@ -471,6 +491,45 @@ fn laden_ungeschuetzt(auftrag: &Ladeauftrag) -> Result<Muster, Ladefehler> {
         teile,
         ohne_umriss,
         naehte,
+    })
+}
+
+/// A seam suggestion as a seam list text ([`nahtliste_text`]) and its number of seams.
+#[derive(Debug, Clone)]
+pub struct Nahtvorschlag {
+    pub text: String,
+    pub naehte: usize,
+}
+
+/// Suggest the seams of the pattern `muster` was loaded from, with its measurement file, as
+/// `klon3d naehte --vorschlag` does ([`Auswertung::schlage_naehte_vor`] with
+/// [`Kurvenquelle::Seamly`], the same head line). The pattern is read again: [`Muster`] keeps no
+/// evaluation.
+pub fn naehte_vorschlagen(muster: &Muster) -> Result<Nahtvorschlag, String> {
+    let pfad = &muster.pfad;
+    let ergebnis = catch_unwind(AssertUnwindSafe(|| -> Result<Nahtvorschlag, String> {
+        let m = read_path(pfad).map_err(|e| format!("{}: {e}", pfad.display()))?;
+        let mess = lies_messungen(&muster.massdatei, &m.unit)
+            .map_err(|e| format!("{}: {e}", muster.massdatei.display()))?;
+        let ev = Auswertung::new(&m, mess);
+        let v = ev
+            .schlage_naehte_vor(Kurvenquelle::Seamly)
+            .map_err(|e| format!("{}: {e}", pfad.display()))?;
+        let kopf = format!(
+            "Nahtvorschlag zu {} (klon3d naehte --vorschlag), {} Naehte.\nAus gleichen Laengen, Kerben, gemeinsamen Punkten und der Lage in der Zeichnung; bitte durchsehen.",
+            dateiname(pfad),
+            v.naehte.len()
+        );
+        Ok(Nahtvorschlag {
+            text: nahtliste_text(&v.naehte, &kopf),
+            naehte: v.naehte.len(),
+        })
+    }));
+    ergebnis.unwrap_or_else(|_| {
+        Err(format!(
+            "{}: interner Fehler beim Nahtvorschlag",
+            pfad.display()
+        ))
     })
 }
 

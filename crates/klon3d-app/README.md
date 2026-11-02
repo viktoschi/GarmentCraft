@@ -9,6 +9,36 @@ done and committed; update "Status" at the top when you stop.
 
 ## Status
 
+**2026-11-02 - stage 6c, items 1-3 of [#40](https://github.com/viktoschi/klon3d/issues/40)**
+(branch `40-grainline`, base `bfe4a58`): grainlines and notches in the 2D view, 2D-Schnitt >
+"Nähte vorschlagen…" with a save mode of the file dialog. Item 4 (Netzprüfung) is not part of it
+and stays greyed out (it moves after #38). `cargo test --locked -p klon3d-app` on Windows: 95
+tests (48 unit + 47 UI; 9 new: 4 unit, 5 in `tests/fadenlauf_naehte.rs`), no compiler warnings;
+the crate's files stay rustfmt-clean. Checked by eye on PNGs of `examples/bildschirmfoto.rs` (not
+in the repository): the Bluse3 v2 shows its notches; it has no grainline element, so the
+grainlines were seen on a copy with one added to every piece (arrows 0/1/2), as the test does.
+
+* **Grainline** (`muster::Teil::fadenlauf`, `ansicht2d::pfeilspitzen`): `Auswertung::fadenlauf`
+  per piece, construction coordinates like `umriss`; drawn as a line with Seamly2D's arrow heads
+  (`arrows` 0 both ends, 1 at `p2`, 2 at `p1`, 20 degrees, 9 px). `Ok(None)` draws nothing; `Err`
+  draws nothing and is kept in `Teil::fadenlauf_fehler`, shown in the hover text of the piece in
+  the 2D view (see open points).
+* **Notches** (`ansicht2d::passzeichen`): every point node with `notch="true"` as a 10 px tick
+  across the outline (normal of the mean direction of the neighbouring segments).
+* **Toggles** "Fadenlauf" and "Passzeichen" in Anzeige > 2D-Schnitt and in the 2D toolbar, stored
+  in `Anzeige2d` (`fadenlauf=1;passzeichen=1`, a missing key means on); disabled without a pattern
+  (hover "erst ein Muster öffnen").
+* **Seam suggestion** (`muster::naehte_vorschlagen`, `App::naehte_vorschlagen`): reads the pattern
+  again, `schlage_naehte_vor(Kurvenquelle::Seamly)`, `nahtliste_text` with the head line of
+  `klon3d naehte --vorschlag`; the file dialog opens in save mode (`Zweck::NahtlisteSpeichern`:
+  file name field with `<stem>.naehte`, button "Datei speichern", an existing file only after
+  "Überschreiben"); then the pattern is loaded with that list and the Nähte tab shown.
+
+The properties of a piece have a row "Fadenlauf": "ja", "keiner" or the error in the error colour
+(also in the hover text of the 2D view). Test `eigenschaften_nennen_fadenlauf_und_seinen_fehler`
+breaks one grainline of a copy (`arrows="7"`) and checks all three states. Item 4 (mesh check) follows
+after #38 through `klon3d-pipeline`; "Netzprüfung" stays greyed out until then.
+
 **2026-11-02 – steps 8–10 done, pull request open (step 11):** `origin/main` (with #35 from task #33)
 is merged into the branch – a merge, not a rebase, so the branch never needs a force push; the PR is
 squash-merged anyway. On the merged state: `cargo +1.99 build --locked --workspace --exclude
@@ -333,12 +363,13 @@ exist but are disabled.
 | `src/bibliothek.rs` | the library panel on the shared `Verzeichnis` |
 | `src/panele.rs` | object browser (tabs Teile, Nähte, Stoffe), properties of a piece or seam, status bar |
 | `src/dialoge.rs` | floating windows: file dialog, error, help (shortcuts, about), Informationen, drop hint |
-| `src/muster.rs` | loading without UI: `.sm2d` → `Auswertung` → piece outlines (`ev.stueck_umriss`), circumference (`ev.umriss_laenge`), boundary edges (`ev.teilrand(stueck, Kurvenquelle::Seamly)`), seam report (`naehte::lies_nahtliste` + `pruefe_naehte`, the same numbers as `klon3d naehte`); measurement file as the pattern names it (see `klon3d-view/src/main.rs`, `Blatt::laden`) or chosen by hand |
-| `src/ansicht2d.rs` | 2D view: pieces laid out side by side (as `klon3d-view` `auslegen`), pan, zoom around the cursor, fit, hit test, selection highlight, seams, edge lengths, scale bar |
-| `src/dateiwahl.rs` | folder listing `Verzeichnis` (shared with the library) and the modal file dialog |
+| `src/muster.rs` | (6c) also each piece's grainline (`Teil::fadenlauf`, `fadenlauf_fehler`) and the seam suggestion `naehte_vorschlagen` (seam list text, numbers of `klon3d naehte --vorschlag`); loading without UI: `.sm2d` → `Auswertung` → piece outlines (`ev.stueck_umriss`), circumference (`ev.umriss_laenge`), boundary edges (`ev.teilrand(stueck, Kurvenquelle::Seamly)`), seam report (`naehte::lies_nahtliste` + `pruefe_naehte`, the same numbers as `klon3d naehte`); measurement file as the pattern names it (see `klon3d-view/src/main.rs`, `Blatt::laden`) or chosen by hand |
+| `src/ansicht2d.rs` | 2D view: pieces laid out side by side (as `klon3d-view` `auslegen`), pan, zoom around the cursor, fit, hit test, selection highlight, seams, edge lengths, scale bar; (6c) grainlines with arrow heads (`pfeilspitzen`) and notch ticks (`passzeichen`) |
+| `src/dateiwahl.rs` | folder listing `Verzeichnis` (shared with the library) and the modal file dialog; (6c) save mode (`Zweck::NahtlisteSpeichern`: file name field, question before overwriting) |
 | `tests/gemeinsam/mod.rs` | helpers of the UI tests: windows, independent Bluse3 evaluation, grid rows, menus, storage |
 | `tests/oberflaeche.rs` | kittest: pieces and seams against `pruefe_naehte`, selection, theme, menus and their disabled entries, shortcuts, file dialog, drag and drop, measurement file choice, minimum size, all test patterns |
 | `tests/fensteranordnung.rs` | kittest: toolbars, Fenster toggles, Strg+Tab, Umschalt+S/Z, edge lengths, recent files, library, fabrics, Informationen, seam properties, old stored state, reset; (review 7b) double click on a folder, names vs lengths, names in the default arrangement, seam grid inside the object browser, help windows centred, recent files through `..` |
+| `tests/fadenlauf_naehte.rs` | kittest (6c): grainlines against `Auswertung::fadenlauf` (Bluse3 v2 and a copy with a grainline on every piece) and drawn one per piece, notch ticks one per notch, both toggles stored (old text = on), disabled without a pattern, "Nähte vorschlagen…" writes a `.naehte` with as many seams as `schlage_naehte_vor`, loads it, asks before overwriting |
 | `examples/bildschirmfoto.rs` | renders the window with kittest's wgpu renderer to PNG, no window and no focus taken (`--muster`, `--aus`, `--breite`, `--hoehe`, `--massstab`, `--dunkel`/`--hell`). kittest prefers a software adapter, so the status bar shows e.g. "Microsoft Basic Render Driver" – not the GPU the app uses |
 
 Menu bar (step 7b; `[s]` = disabled, a later task): **Datei** (Neu Strg+N [s], Öffnen… Strg+O,
@@ -348,10 +379,11 @@ DXF… [s], Informationen…, Beenden Strg+Q) · **Bearbeiten** (Rückgängig St
 Strg+Y [s], Alles auswählen Strg+A [s], Auswahl aufheben Esc) · **3D-Kleidung** (Simulation
 starten/anhalten, Einzelschritt, Zurücksetzen, Anordnen, Netzauflösung…, Netzprüfung – all [s]) ·
 **2D-Schnitt** (Auslage / Konstruktionslage L, Einpassen F, Nächstes Teil Tab, Vorheriges Teil
-Umschalt+Tab, Nähen › Nahtliste wählen… / Nahtlängen prüfen / Nähte anzeigen Umschalt+S) ·
+Umschalt+Tab, Nähen › Nahtliste wählen… / Nahtlängen prüfen / Nähte anzeigen Umschalt+S, Nähte
+vorschlagen… (6c)) ·
 **Materialien** (Stoff zuweisen… [s], Stoffbibliothek) · **Avatar** (Körper laden… Strg+Umschalt+A [s],
 Maßdatei wählen…, Avatar anzeigen Umschalt+A [s], Maße am Körper [s]) · **Anzeige** (Blickwinkel ›
-[s], 3D-Kleidung › [s], 2D-Schnitt › Nähte / Längen / Teilnamen / Maßstab, Avatar › [s], Fenster ›
+[s], 3D-Kleidung › [s], 2D-Schnitt › Nähte / Längen / Teilnamen / Maßstab / Fadenlauf / Passzeichen (6c), Avatar › [s], Fenster ›
 five areas + Fenster wechseln Strg+Tab, Werkzeugleisten › three toolbars, Anordnung zurücksetzen) ·
 **Einstellungen** (Design › Dunkel / Hell, Sprache › Deutsch / English [s]) · **Hilfe** (Tastenkürzel,
 Über klon3d). Status bar: frames per second, GPU adapter and backend, largest seam deviation, last

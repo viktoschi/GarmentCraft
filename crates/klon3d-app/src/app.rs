@@ -49,7 +49,10 @@ use crate::anordnung::{
 use crate::ansicht2d::Ansicht2d;
 use crate::bibliothek::Bibliothek;
 use crate::dateiwahl::{auflisten, passt, Dateiwahl, Zweck};
-use crate::muster::{delta4, Ladeauftrag, Ladefehler, Muster, Nahtstand};
+use crate::muster::{
+    dateiname, delta4, naehte_vorschlagen, nahtliste_neben, Ladeauftrag, Ladefehler, Muster,
+    Nahtstand, Nahtvorschlag,
+};
 use crate::panele::Reiter;
 
 /// Storage key of the theme (`"dunkel"` or `"hell"`).
@@ -90,6 +93,10 @@ pub enum Aktion {
     LaengenUmschalten,
     TeilnamenUmschalten,
     MassstabUmschalten,
+    FadenlaufUmschalten,
+    PasszeichenUmschalten,
+    /// Suggest the seams of the pattern shown and ask where to save the list.
+    NaehteVorschlagen,
     ThemaUmschalten,
     ThemaSetzen(Theme),
     NaechstesTeil,
@@ -155,6 +162,8 @@ pub struct App {
     /// Text of the error window while it is open.
     pub fehlerfenster: Option<String>,
     pub dateiwahl: Option<Dateiwahl>,
+    /// The seam suggestion waiting for the save dialog ("Nähte vorschlagen…").
+    pub nahtvorschlag: Option<Nahtvorschlag>,
     pub hilfe: Option<Hilfe>,
     /// The window "Informationen" about the loaded files is open.
     pub informationen: bool,
@@ -238,6 +247,7 @@ impl App {
             meldung_fehler: false,
             fehlerfenster: None,
             dateiwahl: None,
+            nahtvorschlag: None,
             hilfe: None,
             informationen: false,
             letzter_ordner,
@@ -513,6 +523,13 @@ impl App {
             Aktion::MassstabUmschalten => {
                 self.ansicht.anzeige.massstab = !self.ansicht.anzeige.massstab
             }
+            Aktion::FadenlaufUmschalten => {
+                self.ansicht.anzeige.fadenlauf = !self.ansicht.anzeige.fadenlauf
+            }
+            Aktion::PasszeichenUmschalten => {
+                self.ansicht.anzeige.passzeichen = !self.ansicht.anzeige.passzeichen
+            }
+            Aktion::NaehteVorschlagen => self.naehte_vorschlagen(),
             Aktion::ThemaUmschalten => {
                 self.thema = match self.thema {
                     Theme::Dark => Theme::Light,
@@ -599,7 +616,67 @@ impl App {
             Zweck::Muster => self.mit_dateien(Some(pfad), None, None),
             Zweck::Massdatei => self.mit_dateien(None, Some(pfad), None),
             Zweck::Nahtliste => self.mit_dateien(None, None, Some(pfad)),
+            Zweck::NahtlisteSpeichern => self.vorschlag_speichern(&pfad),
         };
+    }
+
+    /// "Nähte vorschlagen…": suggest the seams of the pattern shown and open the save dialog at
+    /// `<pattern>.naehte`; the suggestion waits in [`App::nahtvorschlag`].
+    fn naehte_vorschlagen(&mut self) {
+        let Some(m) = &self.muster else {
+            self.melden("Erst ein Muster öffnen", true);
+            return;
+        };
+        match naehte_vorschlagen(m) {
+            Ok(v) => {
+                let ziel = nahtliste_neben(&m.pfad);
+                let ordner = ziel
+                    .parent()
+                    .map(Path::to_path_buf)
+                    .unwrap_or_else(|| self.letzter_ordner.clone());
+                let text = format!("{} Nähte vorgeschlagen – wohin speichern?", v.naehte);
+                self.dateiwahl = Some(Dateiwahl::zum_speichern(
+                    Zweck::NahtlisteSpeichern,
+                    &ordner,
+                    &dateiname(&ziel),
+                ));
+                self.nahtvorschlag = Some(v);
+                self.melden(text, false);
+            }
+            Err(e) => self.fehler(e),
+        }
+    }
+
+    /// Write the waiting seam suggestion to `pfad` and load the pattern shown with it, so the
+    /// seam tab shows the checked result. Returns whether the list was written and loaded.
+    fn vorschlag_speichern(&mut self, pfad: &Path) -> bool {
+        let Some(v) = self.nahtvorschlag.take() else {
+            self.melden("Kein Nahtvorschlag – 2D-Schnitt › Nähte vorschlagen…", true);
+            return false;
+        };
+        if let Err(e) = std::fs::write(pfad, &v.text) {
+            self.fehler(format!("{}: {e}", pfad.display()));
+            return false;
+        }
+        let Some(mut auftrag) = self.auftrag.clone() else {
+            return false;
+        };
+        auftrag.nahtliste = Some(pfad.to_path_buf());
+        let geladen = self.laden(auftrag);
+        if geladen {
+            self.melden(
+                format!(
+                    "{} Nähte vorgeschlagen und gespeichert: {}",
+                    v.naehte,
+                    pfad.display()
+                ),
+                false,
+            );
+            self.anordnung.browser = true;
+            self.reiter = Reiter::Naehte;
+            self.nahtliste_zeigen = true;
+        }
+        geladen
     }
 
     /// Keyboard shortcuts. Letters and Tab only act while no text field has the keyboard and

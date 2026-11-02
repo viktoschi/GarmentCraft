@@ -362,6 +362,19 @@ pub fn eigenschaften(app: &mut App, ui: &mut egui::Ui) {
                     ui.label("Einheit");
                     ui.label(&m.einheit);
                     ui.end_row();
+                    ui.label("Fadenlauf");
+                    match (&t.fadenlauf, &t.fadenlauf_fehler) {
+                        (_, Some(e)) => {
+                            ui.colored_label(ui.visuals().error_fg_color, format!("Fehler: {e}"));
+                        }
+                        (Some(_), None) => {
+                            ui.label("ja");
+                        }
+                        (None, None) => {
+                            ui.weak("keiner");
+                        }
+                    }
+                    ui.end_row();
                 });
             ui.add_space(6.0);
             let rand = match &t.rand {
