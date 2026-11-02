@@ -128,7 +128,7 @@ pub fn menues(app: &mut App, ui: &mut egui::Ui) {
         ui.separator();
         spaeter(ui, "Anordnen", "");
         spaeter(ui, "Netzauflösung…", "");
-        spaeter(ui, "Netzprüfung", "");
+        eintrag_mit_muster(ui, app, "Netzprüfung", "", Aktion::NetzPruefen);
     });
     ui.menu_button("2D-Schnitt", |ui| schnitt(app, ui));
     ui.menu_button("Materialien", |ui| {

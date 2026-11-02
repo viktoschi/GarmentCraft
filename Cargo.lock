@@ -1530,7 +1530,9 @@ dependencies = [
  "eframe",
  "egui_kittest",
  "image",
+ "klon3d-mesh",
  "klon3d-pattern",
+ "klon3d-pipeline",
  "wgpu",
 ]
 

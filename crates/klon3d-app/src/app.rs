@@ -50,8 +50,8 @@ use crate::ansicht2d::Ansicht2d;
 use crate::bibliothek::Bibliothek;
 use crate::dateiwahl::{auflisten, passt, Dateiwahl, Zweck};
 use crate::muster::{
-    dateiname, delta4, naehte_vorschlagen, nahtliste_neben, Ladeauftrag, Ladefehler, Muster,
-    Nahtstand, Nahtvorschlag,
+    dateiname, delta4, naehte_vorschlagen, nahtliste_neben, netz_pruefen, Ladeauftrag, Ladefehler,
+    Muster, Nahtstand, Nahtvorschlag, Netzauftrag, Netzpruefung,
 };
 use crate::panele::Reiter;
 
@@ -84,6 +84,8 @@ pub enum Aktion {
     /// [`App::ladeziel`] – as if it had been dropped onto the window.
     DateiVerwenden(PathBuf),
     InformationenZeigen,
+    /// Mesh the pattern shown, check the mesh and show the report.
+    NetzPruefen,
     Beenden,
     Einpassen,
     LageUmschalten,
@@ -167,6 +169,9 @@ pub struct App {
     pub hilfe: Option<Hilfe>,
     /// The window "Informationen" about the loaded files is open.
     pub informationen: bool,
+    /// The mesh check window is open with this result, for the files it was computed from. It
+    /// closes when the pattern shown changes.
+    pub netzpruefung: Option<(Netzauftrag, Result<Netzpruefung, String>)>,
     /// Folder the file dialog starts in.
     pub letzter_ordner: PathBuf,
     /// Recently opened patterns, newest first, at most [`anordnung::ZULETZT_MAX`].
@@ -250,6 +255,7 @@ impl App {
             nahtvorschlag: None,
             hilfe: None,
             informationen: false,
+            netzpruefung: None,
             letzter_ordner,
             zuletzt: anordnung::zuletzt_aus_text(&lies(SCHLUESSEL_ZULETZT).unwrap_or_default()),
             zuletzt_pruefung: ZuletztPruefung::default(),
@@ -502,6 +508,32 @@ impl App {
             }
             Aktion::DateiVerwenden(p) => self.dateien_ablegen(vec![p]),
             Aktion::InformationenZeigen => self.informationen = self.muster.is_some(),
+            Aktion::NetzPruefen => {
+                let Some(m) = &self.muster else {
+                    self.melden("Erst ein Muster öffnen", true);
+                    return;
+                };
+                // Synchronous: about 55 ms on Bluse3 v2 in a release build.
+                let auftrag = Netzauftrag::zu(m);
+                let ergebnis = netz_pruefen(&auftrag);
+                match &ergebnis {
+                    Ok(n) => self.melden(
+                        &format!(
+                            "Netzprüfung {}: {} ({:.0} ms)",
+                            dateiname(&auftrag.muster),
+                            if n.bestanden() {
+                                "bestanden"
+                            } else {
+                                "NICHT bestanden"
+                            },
+                            n.dauer.as_secs_f64() * 1000.0
+                        ),
+                        !n.bestanden(),
+                    ),
+                    Err(e) => self.melden(&format!("Netzprüfung: {e}"), true),
+                }
+                self.netzpruefung = Some((auftrag, ergebnis));
+            }
             Aktion::Beenden => {
                 self.beenden_angefordert = true;
                 ctx.send_viewport_cmd(egui::ViewportCommand::Close);
@@ -698,6 +730,8 @@ impl App {
                 self.hilfe = None;
             } else if self.informationen {
                 self.informationen = false;
+            } else if self.netzpruefung.is_some() {
+                self.netzpruefung = None;
             } else {
                 self.aktion(Aktion::AuswahlAufheben);
             }

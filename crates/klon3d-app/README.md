@@ -9,6 +9,26 @@ done and committed; update "Status" at the top when you stop.
 
 ## Status
 
+**2026-11-02 - mesh check, [#46](https://github.com/viktoschi/klon3d/issues/46)** (branch
+`46-mesh-check`, base `4b1d229`): 3D-Kleidung > "Netzprüfung" is enabled with a pattern (without
+one disabled with the hover text "erst ein Muster öffnen"). It meshes the pattern shown through
+`klon3d_pipeline::Muster::netz` with the seam list in use (none: only the meshes; a broken list:
+its error) and the default `klon3d_mesh::Parameter`, checks the mesh with
+`klon3d_mesh::pruefung::pruefe` and shows the report in a floating window like "Informationen":
+files, mesh parameters, pieces of the pattern and pieces meshed, points, triangles, seams, largest
+seam offset, smallest angle, rounds, time, acceptance (violations and unmeshed pieces in the error
+colour), then one row per piece as `klon3d netz` prints it (`muster::netz_pruefen`,
+`dialoge::netzbericht_zeilen`). The window closes with Esc, its button, or when another pattern is
+loaded. The app depends on `klon3d-pipeline` and also on `klon3d-mesh`, because the pipeline
+re-exports neither `Parameter` nor `pruefung`. It runs synchronously in the frame: on Bluse3 v2 it
+takes about 55 ms in a release build (about 300 ms in a debug build), well under the one second
+that would call for a thread. The table of pieces scrolls at a fixed height: with only a maximum
+height egui grew the scroll area by a few pixels per frame without a repaint, and the close button
+crept away from under the first click (asserted in the test). Tests: unit tests
+`netzpruefung_wie_vernetze_und_pruefe`, `netzpruefung_ohne_brauchbare_nahtliste`;
+`tests/netzpruefung.rs` (disabled with hover text, report numbers against an independent
+`vernetze` + `pruefe`, closing).
+
 **2026-11-02 - stage 6c, items 1-3 of [#40](https://github.com/viktoschi/klon3d/issues/40)**
 (branch `40-grainline`, base `bfe4a58`): grainlines and notches in the 2D view, 2D-Schnitt >
 "Nähte vorschlagen…" with a save mode of the file dialog. Item 4 (Netzprüfung) is not part of it
@@ -362,7 +382,7 @@ exist but are disabled.
 | `src/menue.rs` | the nine menus, the file toolbar, the toolbars of the 3D and 2D window |
 | `src/bibliothek.rs` | the library panel on the shared `Verzeichnis` |
 | `src/panele.rs` | object browser (tabs Teile, Nähte, Stoffe), properties of a piece or seam, status bar |
-| `src/dialoge.rs` | floating windows: file dialog, error, help (shortcuts, about), Informationen, drop hint |
+| `src/dialoge.rs` | floating windows: file dialog, error, help (shortcuts, about), Informationen, Netzprüfung (#46), drop hint |
 | `src/muster.rs` | (6c) also each piece's grainline (`Teil::fadenlauf`, `fadenlauf_fehler`) and the seam suggestion `naehte_vorschlagen` (seam list text, numbers of `klon3d naehte --vorschlag`); loading without UI: `.sm2d` → `Auswertung` → piece outlines (`ev.stueck_umriss`), circumference (`ev.umriss_laenge`), boundary edges (`ev.teilrand(stueck, Kurvenquelle::Seamly)`), seam report (`naehte::lies_nahtliste` + `pruefe_naehte`, the same numbers as `klon3d naehte`); measurement file as the pattern names it (see `klon3d-view/src/main.rs`, `Blatt::laden`) or chosen by hand |
 | `src/ansicht2d.rs` | 2D view: pieces laid out side by side (as `klon3d-view` `auslegen`), pan, zoom around the cursor, fit, hit test, selection highlight, seams, edge lengths, scale bar; (6c) grainlines with arrow heads (`pfeilspitzen`) and notch ticks (`passzeichen`) |
 | `src/dateiwahl.rs` | folder listing `Verzeichnis` (shared with the library) and the modal file dialog; (6c) save mode (`Zweck::NahtlisteSpeichern`: file name field, question before overwriting) |
@@ -370,6 +390,7 @@ exist but are disabled.
 | `tests/oberflaeche.rs` | kittest: pieces and seams against `pruefe_naehte`, selection, theme, menus and their disabled entries, shortcuts, file dialog, drag and drop, measurement file choice, minimum size, all test patterns |
 | `tests/fensteranordnung.rs` | kittest: toolbars, Fenster toggles, Strg+Tab, Umschalt+S/Z, edge lengths, recent files, library, fabrics, Informationen, seam properties, old stored state, reset; (review 7b) double click on a folder, names vs lengths, names in the default arrangement, seam grid inside the object browser, help windows centred, recent files through `..` |
 | `tests/fadenlauf_naehte.rs` | kittest (6c): grainlines against `Auswertung::fadenlauf` (Bluse3 v2 and a copy with a grainline on every piece) and drawn one per piece, notch ticks one per notch, both toggles stored (old text = on), disabled without a pattern, "Nähte vorschlagen…" writes a `.naehte` with as many seams as `schlage_naehte_vor`, loads it, asks before overwriting |
+| `tests/netzpruefung.rs` | kittest (#46): Netzprüfung disabled without a pattern (hover text), the report of the Bluse3 v2 with the numbers of an independent `vernetze` + `pruefe` (totals and one row per piece), closing by button, Esc and loading another pattern |
 | `examples/bildschirmfoto.rs` | renders the window with kittest's wgpu renderer to PNG, no window and no focus taken (`--muster`, `--aus`, `--breite`, `--hoehe`, `--massstab`, `--dunkel`/`--hell`). kittest prefers a software adapter, so the status bar shows e.g. "Microsoft Basic Render Driver" – not the GPU the app uses |
 
 Menu bar (step 7b; `[s]` = disabled, a later task): **Datei** (Neu Strg+N [s], Öffnen… Strg+O,
@@ -377,7 +398,7 @@ Zuletzt geöffnet ›, Hinzufügen › Maßdatei… / Nahtliste…, Speichern St
 Strg+Umschalt+S [s], Import › Seamly2D-Muster (.sm2d)… / CLO-Projekt (.zprj)… [s], Export › OBJ… [s] /
 DXF… [s], Informationen…, Beenden Strg+Q) · **Bearbeiten** (Rückgängig Strg+Z [s], Wiederholen
 Strg+Y [s], Alles auswählen Strg+A [s], Auswahl aufheben Esc) · **3D-Kleidung** (Simulation
-starten/anhalten, Einzelschritt, Zurücksetzen, Anordnen, Netzauflösung…, Netzprüfung – all [s]) ·
+starten/anhalten, Einzelschritt, Zurücksetzen, Anordnen, Netzauflösung… - all [s]; Netzprüfung (#46)) ·
 **2D-Schnitt** (Auslage / Konstruktionslage L, Einpassen F, Nächstes Teil Tab, Vorheriges Teil
 Umschalt+Tab, Nähen › Nahtliste wählen… / Nahtlängen prüfen / Nähte anzeigen Umschalt+S, Nähte
 vorschlagen… (6c)) ·

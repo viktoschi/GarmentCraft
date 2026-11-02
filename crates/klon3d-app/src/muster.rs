@@ -33,6 +33,12 @@
 //! it cannot be evaluated. [`naehte_vorschlagen`] reads the pattern again and suggests its seams
 //! as `klon3d naehte --vorschlag` does, as the text of a seam list.
 //!
+//! ## Mesh check
+//!
+//! [`netz_pruefen`] meshes the pattern through `klon3d-pipeline` ([`klon3d_pipeline::Muster::netz`])
+//! with the seam list in use and checks the mesh ([`klon3d_mesh::pruefung::pruefe`]) – the numbers
+//! of `klon3d netz`. It takes a [`Netzauftrag`] of plain paths, so it can run on a thread.
+//!
 //! Nothing here panics on a broken file: errors come back as [`Ladefehler`] with the file name, and a
 //! panic inside the pattern reader is caught and reported the same way. [`Ladefehler::Massdatei`]
 //! marks the errors that another measurement file can cure, so the window can offer to choose one.
@@ -41,6 +47,7 @@ use std::collections::HashMap;
 use std::panic::{catch_unwind, AssertUnwindSafe};
 use std::path::{Path, PathBuf};
 
+use klon3d_mesh::pruefung::{self, Netzbericht};
 use klon3d_pattern::geom::{lies_messungen, Auswertung, Pt};
 use klon3d_pattern::kanten::{Kurvenquelle, Teilrand};
 use klon3d_pattern::naehte::{
@@ -531,6 +538,115 @@ pub fn naehte_vorschlagen(muster: &Muster) -> Result<Nahtvorschlag, String> {
             pfad.display()
         ))
     })
+}
+
+/// What the mesh check needs of a loaded pattern – only paths, so it can be sent to a thread.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Netzauftrag {
+    pub muster: PathBuf,
+    pub massdatei: PathBuf,
+    /// The seam list to mesh with (`None` = none, only the meshes), or why it cannot be used.
+    pub nahtliste: Result<Option<PathBuf>, String>,
+    /// Pieces of the pattern shown.
+    pub teile: usize,
+}
+
+impl Netzauftrag {
+    pub fn zu(muster: &Muster) -> Netzauftrag {
+        let nahtliste = match &muster.naehte {
+            Nahtstand::Geprueft { pfad, .. } => Ok(Some(pfad.clone())),
+            Nahtstand::Keine { .. } => Ok(None),
+            Nahtstand::Fehler { text, .. } => Err(text.clone()),
+        };
+        Netzauftrag {
+            muster: muster.pfad.clone(),
+            massdatei: muster.massdatei.clone(),
+            nahtliste,
+            teile: muster.teile.len(),
+        }
+    }
+}
+
+/// Result of the mesh check: [`klon3d_mesh::pruefung::pruefe`] on the mesh of
+/// [`klon3d_pipeline::Muster::netz`] with the default parameters – the numbers of `klon3d netz`.
+#[derive(Debug, Clone)]
+pub struct Netzpruefung {
+    pub auftrag: Netzauftrag,
+    pub parameter: klon3d_mesh::Parameter,
+    pub bericht: Netzbericht,
+    pub punkte: usize,
+    pub dreiecke: usize,
+    /// Pieces that could not be meshed, with the reason.
+    pub nicht_vernetzt: Vec<String>,
+    pub runden: usize,
+    pub offene_teilungen: usize,
+    /// Violations of the acceptance ([`Netzbericht::verstoesse`]); empty = passed.
+    pub verstoesse: Vec<String>,
+    /// Wall time of loading, meshing and checking.
+    pub dauer: std::time::Duration,
+}
+
+impl Netzpruefung {
+    /// Largest seam offset in mm (0 without seams).
+    pub fn groesster_versatz(&self) -> f64 {
+        self.bericht
+            .naehte
+            .iter()
+            .map(|n| n.versatz_max)
+            .fold(0.0, f64::max)
+    }
+
+    /// Smallest triangle angle over all pieces in degrees, `None` without pieces.
+    pub fn kleinster_winkel(&self) -> Option<f64> {
+        self.bericht
+            .teile
+            .iter()
+            .map(|t| t.min_winkel)
+            .reduce(f64::min)
+    }
+
+    /// Passed as `klon3d netz` decides it (without the output files).
+    pub fn bestanden(&self) -> bool {
+        self.verstoesse.is_empty() && self.offene_teilungen == 0
+    }
+}
+
+/// Mesh the pattern of `auftrag` through `klon3d-pipeline` and check the mesh, as `klon3d netz`
+/// does with its defaults. The pattern is read again: [`Muster`] keeps no evaluation.
+pub fn netz_pruefen(auftrag: &Netzauftrag) -> Result<Netzpruefung, String> {
+    let name = dateiname(&auftrag.muster);
+    let ergebnis = catch_unwind(AssertUnwindSafe(|| -> Result<Netzpruefung, String> {
+        let start = std::time::Instant::now();
+        let nahtliste = auftrag
+            .nahtliste
+            .clone()
+            .map_err(|t| format!("Nahtliste nicht verwendbar: {t}"))?;
+        let m = klon3d_pipeline::Muster::laden(&auftrag.muster, Some(&auftrag.massdatei))
+            .map_err(|e| e.to_string())?;
+        let defs = match &nahtliste {
+            Some(p) => klon3d_pipeline::nahtliste(p).map_err(|e| e.to_string())?,
+            None => Vec::new(),
+        };
+        let parameter = klon3d_mesh::Parameter::default();
+        let netz = m
+            .netz(&defs, &parameter)
+            .map_err(|e| format!("{name}: {e}"))?;
+        let bericht = pruefung::pruefe(&netz);
+        let verstoesse = bericht.verstoesse(&parameter);
+        Ok(Netzpruefung {
+            auftrag: auftrag.clone(),
+            parameter,
+            punkte: netz.teile.iter().map(|t| t.punkte.len()).sum(),
+            dreiecke: netz.teile.iter().map(|t| t.dreiecke.len()).sum(),
+            nicht_vernetzt: netz.fehler.clone(),
+            runden: netz.runden,
+            offene_teilungen: netz.offene_teilungen,
+            verstoesse,
+            bericht,
+            dauer: start.elapsed(),
+        })
+    }));
+    ergebnis.unwrap_or_else(|_| Err(format!("{name}: interner Fehler bei der Netzprüfung")))
 }
 
 /// Read and check the seam list, as `klon3d naehte` does.
@@ -1037,6 +1153,77 @@ mod tests {
                 assert_ne!(m.kantenart(ti, k), Kantenart::Auffaellig);
             }
         }
+    }
+
+    #[test]
+    fn netzpruefung_wie_vernetze_und_pruefe() {
+        let m = Muster::laden(&Ladeauftrag::neu(bluse())).unwrap();
+        let auftrag = Netzauftrag::zu(&m);
+        assert_eq!(
+            auftrag.nahtliste,
+            Ok(Some(bluse().with_extension("naehte")))
+        );
+        let n = netz_pruefen(&auftrag).unwrap();
+        eprintln!(
+            "Netzprüfung bluse3_v2: {:.0} ms",
+            n.dauer.as_secs_f64() * 1000.0
+        );
+
+        // Independent: the calls of `klon3d netz`, without the pipeline.
+        let muster = read_path(&bluse()).unwrap();
+        let mess =
+            lies_messungen(&muster_ordner().join("measurements.smis"), &muster.unit).unwrap();
+        let ev = Auswertung::new(&muster, mess);
+        let text = std::fs::read_to_string(bluse().with_extension("naehte")).unwrap();
+        let defs = lies_nahtliste(&text).unwrap();
+        let naehte = pruefe_naehte(&ev, &defs, Kurvenquelle::Seamly).unwrap();
+        let p = klon3d_mesh::Parameter::default();
+        let netz = klon3d_mesh::vernetze(&ev, Kurvenquelle::Seamly, &naehte.naehte, &p).unwrap();
+        let soll = pruefung::pruefe(&netz);
+
+        assert_eq!(n.auftrag.teile, 28);
+        assert_eq!(n.bericht.teile.len(), soll.teile.len());
+        assert_eq!(n.bericht.naehte.len(), 24);
+        assert_eq!(n.bericht.naehte.len(), soll.naehte.len());
+        for (a, b) in n.bericht.teile.iter().zip(&soll.teile) {
+            assert_eq!(a.teil, b.teil);
+            assert_eq!(
+                (a.punkte, a.randpunkte, a.dreiecke),
+                (b.punkte, b.randpunkte, b.dreiecke)
+            );
+            assert_eq!(a.min_winkel, b.min_winkel);
+            assert_eq!((a.kante_median, a.kante_max), (b.kante_median, b.kante_max));
+        }
+        for (a, b) in n.bericht.naehte.iter().zip(&soll.naehte) {
+            assert_eq!(
+                (&a.kennung, a.paare, a.versatz_max),
+                (&b.kennung, b.paare, b.versatz_max)
+            );
+        }
+        assert_eq!(
+            n.punkte,
+            netz.teile.iter().map(|t| t.punkte.len()).sum::<usize>()
+        );
+        assert_eq!(
+            n.dreiecke,
+            netz.teile.iter().map(|t| t.dreiecke.len()).sum::<usize>()
+        );
+        assert_eq!(n.nicht_vernetzt, netz.fehler);
+        assert_eq!(n.verstoesse, soll.verstoesse(&p));
+        assert_eq!(n.offene_teilungen, netz.offene_teilungen);
+    }
+
+    #[test]
+    fn netzpruefung_ohne_brauchbare_nahtliste() {
+        let m = Muster::laden(&Ladeauftrag::neu(bluse())).unwrap();
+        let mut auftrag = Netzauftrag::zu(&m);
+        auftrag.nahtliste = Err("kaputt".into());
+        let e = netz_pruefen(&auftrag).unwrap_err();
+        assert!(e.contains("kaputt"), "{e}");
+        auftrag.nahtliste = Ok(None);
+        let n = netz_pruefen(&auftrag).unwrap();
+        assert!(n.bericht.naehte.is_empty());
+        assert_eq!(n.bericht.teile.len(), 28);
     }
 
     #[test]

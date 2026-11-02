@@ -248,14 +248,13 @@ fn menues_und_gesperrte_eintraege() {
         ),
         (
             &["3D-Kleidung"],
-            &[],
+            &["Netzprüfung"],
             &[
                 "Simulation starten/anhalten",
                 "Einzelschritt",
                 "Zurücksetzen",
                 "Anordnen",
                 "Netzauflösung…",
-                "Netzprüfung",
             ],
         ),
         (

@@ -1,12 +1,12 @@
 //! The windows that float above the layout: the file dialog, the error window, the help windows
-//! (shortcuts, about), "Informationen" about the loaded files, and the hint while files are
-//! dragged over the window.
+//! (shortcuts, about), "Informationen" about the loaded files, the mesh check report, and the
+//! hint while files are dragged over the window.
 
 use eframe::egui;
 
 use crate::app::{Aktion, App, Hilfe};
 use crate::dateiwahl::Antwort;
-use crate::muster::{dateiname, Nahtstand};
+use crate::muster::{dateiname, Nahtstand, Netzauftrag, Netzpruefung};
 
 impl App {
     /// Show the open dialogs; runs every frame after the layout.
@@ -15,6 +15,7 @@ impl App {
         self.fehlerdialog(ctx);
         self.hilfedialog(ctx);
         self.informationsdialog(ctx);
+        self.netzpruefungsdialog(ctx);
     }
 
     fn dateidialog(&mut self, ctx: &egui::Context) {
@@ -171,6 +172,39 @@ impl App {
         }
     }
 
+    /// 3D-Kleidung › Netzprüfung: the report of [`crate::muster::netz_pruefen`], with the
+    /// numbers of `klon3d netz`.
+    fn netzpruefungsdialog(&mut self, ctx: &egui::Context) {
+        let Some((auftrag, ergebnis)) = &self.netzpruefung else {
+            return;
+        };
+        // A report of other files than the ones shown is stale.
+        if self.muster.as_ref().map(Netzauftrag::zu).as_ref() != Some(auftrag) {
+            self.netzpruefung = None;
+            return;
+        }
+        let mut zu = false;
+        egui::Window::new("Netzprüfung")
+            .id(egui::Id::unique("netzpruefung"))
+            .collapsible(false)
+            .resizable(false)
+            .anchor(egui::Align2::CENTER_CENTER, egui::Vec2::ZERO)
+            .show(ctx, |ui| {
+                ui.set_max_width(720.0);
+                match ergebnis {
+                    Ok(n) => netzbericht(ui, n),
+                    Err(e) => {
+                        ui.colored_label(ui.visuals().error_fg_color, e);
+                    }
+                }
+                ui.add_space(6.0);
+                zu = ui.button("Netzprüfung schließen").clicked();
+            });
+        if zu {
+            self.netzpruefung = None;
+        }
+    }
+
     /// Paint a hint while files are dragged over the window.
     pub(crate) fn ablage_hinweis(&self, ctx: &egui::Context) {
         if ctx.input(|i| i.raw.hovered_files.is_empty()) {
@@ -235,6 +269,117 @@ fn tastenkuerzel(ui: &mut egui::Ui) {
         "Buchstaben und Tab wirken nicht, solange ein Textfeld den Fokus hat oder der \
          Dateidialog offen ist.",
     );
+}
+
+/// The rows of the summary of a mesh check, as name and value; the values carry the numbers of
+/// `klon3d netz`.
+pub fn netzbericht_zeilen(n: &Netzpruefung) -> Vec<(&'static str, String)> {
+    let p = &n.parameter;
+    vec![
+        ("Muster", dateiname(&n.auftrag.muster)),
+        (
+            "Nahtliste",
+            match &n.auftrag.nahtliste {
+                Ok(Some(l)) => l.display().to_string(),
+                _ => "keine – nur die Netze".into(),
+            },
+        ),
+        (
+            "Netzparameter",
+            format!(
+                "Kante {} mm, Mindestwinkel {}°, Rand auf {} mm, Fang {} mm",
+                p.kante_mm, p.winkel_grad, p.sehne_mm, p.fang_mm
+            ),
+        ),
+        ("Teile im Muster", n.auftrag.teile.to_string()),
+        ("Teile vernetzt", n.bericht.teile.len().to_string()),
+        ("Punkte gesamt", n.punkte.to_string()),
+        ("Dreiecke gesamt", n.dreiecke.to_string()),
+        ("Nähte", n.bericht.naehte.len().to_string()),
+        (
+            "größter Nahtversatz",
+            format!("{:.3} mm", n.groesster_versatz()),
+        ),
+        (
+            "kleinster Winkel",
+            n.kleinster_winkel()
+                .map_or("–".into(), |w| format!("{w:.1}°")),
+        ),
+        ("Runden Teilen–Neuvernetzen", n.runden.to_string()),
+        ("Dauer", format!("{:.0} ms", n.dauer.as_secs_f64() * 1000.0)),
+        (
+            "Abnahme",
+            if n.bestanden() {
+                "bestanden".into()
+            } else {
+                "NICHT bestanden".into()
+            },
+        ),
+    ]
+}
+
+/// The report of a mesh check: summary, problems, one row per piece.
+fn netzbericht(ui: &mut egui::Ui, n: &Netzpruefung) {
+    egui::Grid::new("netzpruefung_raster")
+        .num_columns(2)
+        .striped(true)
+        .show(ui, |ui| {
+            for (name, wert) in netzbericht_zeilen(n) {
+                ui.strong(name);
+                ui.label(wert);
+                ui.end_row();
+            }
+        });
+    let fehler = ui.visuals().error_fg_color;
+    for f in &n.nicht_vernetzt {
+        ui.colored_label(fehler, format!("nicht vernetzt: {f}"));
+    }
+    if n.offene_teilungen > 0 {
+        ui.colored_label(
+            fehler,
+            format!(
+                "{} Randteilungen nach {} Runden offen",
+                n.offene_teilungen, n.runden
+            ),
+        );
+    }
+    for v in &n.verstoesse {
+        ui.colored_label(fehler, format!("VERSTOSS {v}"));
+    }
+    ui.add_space(6.0);
+    // A fixed height: with only a maximum the area grew by a few pixels per frame without asking
+    // for a repaint, and the close button crept down.
+    egui::ScrollArea::vertical()
+        .id_salt("netzpruefung_teile")
+        .min_scrolled_height(280.0)
+        .max_height(280.0)
+        .show(ui, |ui| {
+            egui::Grid::new("netzpruefung_teile_raster")
+                .num_columns(6)
+                .striped(true)
+                .show(ui, |ui| {
+                    for kopf in [
+                        "Teil",
+                        "Punkte",
+                        "Rand",
+                        "Dreiecke",
+                        "min. Winkel",
+                        "Kante Med/Max mm",
+                    ] {
+                        ui.strong(kopf);
+                    }
+                    ui.end_row();
+                    for t in &n.bericht.teile {
+                        ui.label(t.teil.rsplit(" - ").next().unwrap_or(&t.teil));
+                        ui.label(t.punkte.to_string());
+                        ui.label(t.randpunkte.to_string());
+                        ui.label(t.dreiecke.to_string());
+                        ui.label(format!("{:.1}°", t.min_winkel));
+                        ui.label(format!("{:.1}/{:.1}", t.kante_median, t.kante_max));
+                        ui.end_row();
+                    }
+                });
+        });
 }
 
 /// The text of the help window "Über klon3d".
