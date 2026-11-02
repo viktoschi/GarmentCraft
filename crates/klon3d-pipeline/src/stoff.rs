@@ -1,0 +1,178 @@
+//! Fabrics from CLO `.zfab` files for the solver.
+//!
+//! A `.zfab` is a 16 byte header (`" FAB        CLO "`), a preview image and
+//! then a ZIP archive. Inside the archive sits a single `.fab` file: a
+//! property stream **without** a header, its map block starting at byte 0.
+//! The archive reader finds the offset of the ZIP behind the header by
+//! itself ([`klon3d_pattern::zip::Archiv`] measures it from the central
+//! directory), so the whole file is handed over as it is.
+//!
+//! The numbers live in `mapPhysical`; the field names and units are the ones
+//! CLO's Property Editor shows ([`MATERIAL.md`], which also lists the values
+//! of all eight files):
+//!
+//! | field | unit in the file | [`Material`] | factor |
+//! |---|---|---|---|
+//! | `fSuK` (Stretch weft) | g/s² = mN/m | `dehnung_n_m` (N/m) | 1e-3 |
+//! | `fHK` (Shear) | g/s² | `schub_n_m` (N/m) | 1e-3 |
+//! | `fBuK` (Bending weft) | g·mm²/s²/rad | `biegung_nm` (N·m) | 1e-9 |
+//! | `fDensity` | g/mm² | `flaechengewicht_kg_m2` | 1e+3 |
+//! | `fThickness` | mm | `dicke_m` (m) | 1e-3 |
+//! | `fFriction` | – | `reibung` | 1 |
+//!
+//! **Weft on purpose.** Latex is direction independent, but CLO stored the
+//! measured curve slightly differently per direction (`fSvK` 348 282,
+//! `fBuK` 2 482.24 against `fBvK`/`fBhK` 2 486.49 at 0.4 mm). The built-in
+//! profile `RADICAL_RUBBER_04` carries the weft values, so the weft is what
+//! keeps the round trip exact. Nothing is averaged.
+//!
+//! [`MATERIAL.md`]: ../../../MATERIAL.md
+
+use std::collections::HashMap;
+use std::path::{Path, PathBuf};
+use std::sync::{Mutex, OnceLock};
+
+use klon3d_pattern::property::{self, Map};
+use klon3d_pattern::zip::Archiv;
+use klon3d_sim::Material;
+
+use crate::Fehler;
+
+/// First 16 bytes of every `.zfab`: type code, spaces, `CLO`.
+const KOPF_MAGIC: &[u8] = b" FAB        CLO ";
+
+/// The error of this module carries the file it is about.
+fn fehler(pfad: &Path, was: &str) -> Fehler {
+    Fehler::Datei(format!("{}: {was}", pfad.display()))
+}
+
+/// Reads one `.zfab` into a [`Material`] the solver can use.
+///
+/// The name is the file stem (`Latex_0.4mm_Radical_Rubber`), not the
+/// `qsName` inside the file: they agree in all eight files, and the stem is
+/// what the caller selected.
+pub fn stoff_laden(pfad: &Path) -> Result<Material, Fehler> {
+    let daten = std::fs::read(pfad).map_err(|e| fehler(pfad, &e.to_string()))?;
+    let stamm = pfad
+        .file_stem()
+        .map(|s| s.to_string_lossy().into_owned())
+        .filter(|s| !s.is_empty())
+        .unwrap_or_else(|| pfad.display().to_string());
+    aus_bytes(&daten, &stamm, pfad)
+}
+
+/// Every `.zfab` in `ordner`, sorted by path, one result per file.
+///
+/// A missing or unreadable folder gives an empty list: a fabric folder is not
+/// an error in the sense of this chain, the caller shows what it has. A file
+/// that does not load appears in the list with its error instead of being
+/// dropped silently.
+pub fn stoffe_im_ordner(ordner: &Path) -> Vec<(PathBuf, Result<Material, Fehler>)> {
+    let Ok(eintraege) = std::fs::read_dir(ordner) else {
+        return Vec::new();
+    };
+    let mut pfade: Vec<PathBuf> = eintraege
+        .filter_map(|e| e.ok())
+        .map(|e| e.path())
+        .filter(|p| {
+            p.is_file()
+                && p.extension()
+                    .is_some_and(|e| e.eq_ignore_ascii_case("zfab"))
+        })
+        .collect();
+    pfade.sort();
+    pfade
+        .into_iter()
+        .map(|p| {
+            let m = stoff_laden(&p);
+            (p, m)
+        })
+        .collect()
+}
+
+/// The mapping itself, from the bytes of a `.zfab`. `stamm` is the name the
+/// [`Material`] gets, `pfad` only labels the error message.
+fn aus_bytes(daten: &[u8], stamm: &str, pfad: &Path) -> Result<Material, Fehler> {
+    // Head and container: the 16 byte magic, then `u32[0x20]` (start of the
+    // ZIP) + `u32[0x24]` (its length) must add up to the file size. A file
+    // cut short fails here, before anything is read out of it.
+    if daten.len() < 0x28 || &daten[..16] != KOPF_MAGIC {
+        return Err(fehler(
+            pfad,
+            "kein .zfab-Kopf (16 Byte \" FAB        CLO \")",
+        ));
+    }
+    if !property::hat_kopf(daten) {
+        return Err(fehler(
+            pfad,
+            "Kopf passt nicht zur Dateigröße (Datei abgeschnitten?)",
+        ));
+    }
+
+    let archiv = Archiv::neu(daten).map_err(|e| fehler(pfad, &format!("ZIP: {e}")))?;
+    let fab = archiv
+        .lies_mit_endung(".fab")
+        .map_err(|e| fehler(pfad, &format!(".fab im Archiv: {e}")))?;
+
+    // The `.fab` has no header: the map block starts at byte 0 and has to end
+    // on the last byte, exactly as the `.pac` of a project does.
+    let mut leser = property::Leser::neu(&fab).mit_pfad("zfab");
+    let wurzel = leser
+        .map(None)
+        .map_err(|e| fehler(pfad, &format!(".fab: {e}")))?;
+    if leser.rest() != 0 {
+        return Err(fehler(
+            pfad,
+            &format!(".fab endet {} Byte vor dem Dateiende", leser.rest()),
+        ));
+    }
+
+    let physik = wurzel
+        .pfad_map(&["mapPhysical"])
+        .ok_or_else(|| fehler(pfad, "mapPhysical fehlt"))?;
+
+    Ok(Material {
+        name: name_static(stamm),
+        dehnung_n_m: zahl(physik, "fSuK", pfad)? * 1.0e-3,
+        schub_n_m: zahl(physik, "fHK", pfad)? * 1.0e-3,
+        biegung_nm: zahl(physik, "fBuK", pfad)? * 1.0e-9,
+        flaechengewicht_kg_m2: zahl(physik, "fDensity", pfad)? * 1.0e3,
+        dicke_m: zahl(physik, "fThickness", pfad)? * 1.0e-3,
+        reibung: zahl(physik, "fFriction", pfad)?,
+    })
+}
+
+/// One `f32` field of `mapPhysical`; a missing or differently typed field is
+/// named rather than replaced by a default.
+fn zahl(physik: &Map, feld: &str, pfad: &Path) -> Result<f64, Fehler> {
+    physik
+        .feld(feld)
+        .and_then(|w| w.als_blatt())
+        .and_then(|b| b.als_f32())
+        .map(f64::from)
+        .ok_or_else(|| {
+            fehler(
+                pfad,
+                &format!("mapPhysical.{feld} fehlt oder ist keine f32"),
+            )
+        })
+}
+
+/// [`Material::name`] is `&'static str` and `Material` is `Copy`; the name
+/// therefore cannot live inside it. Each distinct file stem is handed out
+/// once and kept for the lifetime of the process — a few dozen bytes for the
+/// eight files here, nothing that grows while the same fabric is loaded
+/// again.
+fn name_static(name: &str) -> &'static str {
+    static NAMEN: OnceLock<Mutex<HashMap<String, &'static str>>> = OnceLock::new();
+    let mut karte = NAMEN
+        .get_or_init(|| Mutex::new(HashMap::new()))
+        .lock()
+        .unwrap_or_else(|e| e.into_inner());
+    if let Some(&n) = karte.get(name) {
+        return n;
+    }
+    let n: &'static str = Box::leak(name.to_owned().into_boxed_str());
+    karte.insert(name.to_owned(), n);
+    n
+}
