@@ -38,7 +38,7 @@ folder), in 4 of 4 cases.
 | CLO base mesh (reference folder), 47,650 vertices | `C:\Program Files\CLO Standalone OnlineAuth\Preset\Avatar\Resizing\Female\BaseMesh.obj` | cm, body 164.15 cm tall, 76,298 triangles (group `body` 62,658, model 40,465 points) - **the basis** (finding 64; the older mesh is only a backup) |
 | CLO shaping data (reference folder) | there: `FeatureData.bd`, `ReducedVertexData.bd`, `PCA_weight.bd`, `..\Detail_*.txt` | finding 64: shaping matrices computed by regression at load time (PCA); specification `spez/formung_2026_1.md`. The older fields `ConvertingMat_*.bd` (finding 18) are only a backup |
 | `.sm2d` calculator (Python) | `D:\ai\spacebunny\schnitt.py` | reference for the target geometry, **not** a dependency |
-| Measurement file `.smis` | `Hexenensemble...\measurements.smis` | 85 measurements, 160 cm, bust 92.67, waist 74, hip 90, HighHip 83, underbust 76; reader done (finding 24) |
+| Measurement file `.smis` | `Hexenensemble...\measurements.smis` | 86 measurements, 160 cm, bust 92.67, waist 70, hip 90, HighHip 83, underbust 76; reader done (finding 24) |
 | 528 real `.sm2d` patterns | `latex_schnitte\` | test material, 528/528 readable |
 | Formula engine (Rust) | `crates\klon3d-pattern\src\formula.rs` | part of stage 1, done |
 | Circumference measurement on the mesh | `crates\klon3d-koerper\src\lib.rs` | section loop, 4 tests green |
@@ -127,9 +127,9 @@ empty `<measurements/>` no longer takes the next text of the file as its path.
 | `.smis` reader | `<m name value>`, units cm/mm/inch, `@` names, comments | **done** (`smis.rs`, 12 tests; finding 24) |
 | Circumference measurement | section loop that encloses the body axis, gaps ≤ 2 cm closed like a seam | **done for the torso** (findings 22, 25) |
 | Tape measure | convex hull of the section as in CLO (`massband.rs`), candidate selection for the five torso measurements, sampling | **done**: 21 of 22 reference values on the BaseMesh < 0.00001 cm, same candidates (finding 30) |
-| Body base | CLO's `BaseMesh.obj`, 47,650 points, 166.62 cm | **available** |
-| Shaping | `P = base mesh + F_last + Σ F_k · c_k` from the `.bd` fields | **built in**, 5 torso measurements + 8 height fields (finding 24) |
-| 58 measurements | all of CLO's measuring methods (`messung.rs`) | **done**: 57 of 58 on the BaseMesh ≤ 5·10⁻⁷ cm, Wrist +0.035 mm (finding 31) |
+| Body base | CLO's `BaseMesh.obj`, 47,650 vertices (40,465 of them used by a face), 164.15 cm tall in the `body` group; the highest unused vertex reaches 166.60 cm | **available** |
+| Shaping (5.2 backup) | `P = base mesh + F_last + Σ F_k · c_k` from the `.bd` fields | **built in**, 5 torso measurements + 8 height fields (finding 24) |
+| 58 measurements (5.2 set) | the 5.2 measuring methods (`messung.rs`) | **done**: 57 of 58 on the BaseMesh ≤ 5·10⁻⁷ cm, Wrist +0.035 mm (finding 31); the reference set of 67 (`messung_referenz.rs`) is the row below |
 | 67 measurements (reference set) | `messung_referenz.rs`: the measurement set of the reference folder, cut in `f32` (`massband::kantenschnitt_f32`, `normale_f32`) | **done**: 0.00020 / 0.00033 / 0.00014 mm on the three reference meshes (`messung_referenz_clo.rs`) |
 | Shaping chain | BASE + DETAIL Human with calibration, symmetry, centering, `.avs`, hand correction, `.smis` mapping (`kette.rs`) | **done**: all test cases of the specification, against CLO ≤ 0.51 mm (finding 31); **wired up**: `klon3d koerper <measurements.smis> [--out]` shapes the body via `koerper.rs` (group `body` in mm with triangles, also the input for stage 4); if the chain's resizing data are missing, it falls back to `anpassen.rs` (test `koerper_weg`) |
 | Reference shaping chain | `kette_referenz.rs`: the folder no longer ships the finished converting fields, so the form step is computed — PCA regression over `FeatureData` / `ReducedVertexData` / `PCA_weight`, then calibration, symmetry, centring, `.avs`, hand and head post-processing (`nacharbeit_referenz.rs`) | **done**: regression residual 4.9·10⁻⁷, final values ≤ 0.037 mm, points ≤ 0.026 mm (`formung_referenz_clo.rs`, `kette_referenz_clo.rs`) |
@@ -137,7 +137,7 @@ empty `<measurements/>` no longer takes the next text of the file as its path.
 | `.smis` path and HighHip | the reference fields do not carry HighHip, so it is derived from the chain's own BASE mesh | **done** (`kette_referenz_smis.rs`): 5 BASE and 21 DETAIL form steps, both converge, final values within 0.1 mm and points within 0.05 mm of the reference |
 | Target person | `person.rs`: `.smis` → CLO fields, heights, measurement lines, active fields | **available** (finding 24) |
 | Measurement lines | material lines that move with the mesh (`spur.rs`) **or** fixed sections at the `.smis` target heights | **available** (findings 23/24) |
-| Reference measurements | 32 values of the `DETAIL_Advanced` stage (heights in cm, apex 119.41, waist 105.71, crotch 76.87) | **available** (finding 22) |
+| Reference measurements (5.2 backup) | 32 values of the `DETAIL_Advanced` stage (heights in cm, apex 119.41, waist 105.71, crotch 76.87) — belongs to the older Newton route (`anpassen.rs`), the reference folder has its own set (finding 64) | **available** (finding 22) |
 | Acceptance | measured circumference hits the target value | **passed with the shaping chain** (finding 31): CLO measurement bust +0.03, underbust −0.00, waist +0.02, HighHip at CLO's position −0.01, hip −0.02; sampling waist −0.89, hip −0.01. The old route via `anpassen.rs` does not reach them with the tape measure (finding 30) |
 | Height frame | measurement heights from the floor: center the mesh before measuring (lowest point y = 0) | **available** in tape-measure mode; the contour route still cuts 1.95 cm too low (finding 30) |
 | Post-shaping between waist and hip | **beyond the reference program** (`nachformung.rs`, #54): the chain hits the circumferences it knows at the places it knows, and keeps its statistical shape in between. On the user's file (waist 70 at 98 cm, high hip 83 at 93 cm, hip 90 at 77 cm) its body puts the waist at 99.6 cm, needs 24.3 cm from waist to hip instead of 21 and measures 76.7 cm at 93 cm; the chain knows the high hip only about 12 cm below the waist, and given at 5 cm (with waist height and waist-to-hip) its model stops after 2 form steps with the underbust at 81.9. So after the chain: a monotone cubic remap of the heights in a band below the hip to halfway up to the underbust (waist and hip to the file's heights, identity at the ends), then a horizontal scaling of the sections about their centre towards a target profile through waist, high hip and hip, flat at hip and waist, fading to 1 at the band ends; only torso and legs near the torso section move | **done**: waist 69.99 at 98.00 cm, high hip 82.99 at 93.00, hip 90.01 at 77.00, narrowest place at 98.0 cm, 83 → 90 rising without overshoot, 5 rounds; bust, underbust and everything above 103.2 cm bit-identical; silhouette: crossings 50 → 50, none new, dents 84 → 88 (4 existing ones slightly deeper at the gluteal cleft, the crotch and the navel). Without the step (`klon3d koerper --wie-clo`) the body stays exactly the chain's. Not handled: the front/back split of the arcs (high hip 44/41 in the file), the scaling is uniform around the section |
@@ -150,19 +150,23 @@ the criterion from the handover. Measured like a tape measure, as defined in
 `spez/massdefinitionen.md`; test
 `kette_clo::abnahme_aus_smis`; both numbers (CLO measurement at the candidate and
 sampling) lie within ±1 cm, HighHip applies at CLO's position (finding 31).
-That test still runs on the older file (waist 74). On the current file (waist 70)
-the reference chain reads bust 92.666, underbust 76.002, waist
-69.987, hip 90.016; with the post-shaping also the high hip at the user's own
-height, `nachformung_clo::body_between_waist_and_hip` (within 0.3 cm).
+That test still runs on the older 85-row copy
+`crates/klon3d-pattern/tests/muster/measurements.smis` (waist 74). The current file
+has 86 measurements and waist 70; the chain reads bust 92.666, underbust 76.002,
+waist 69.987, hip 90.016 on it. `nachformung_clo::body_between_waist_and_hip` runs on
+`crates/klon3d-pattern/tests/muster/hexen_2026_10_27/measurements.smis` — the same
+measurements without the name — and adds the high hip at the user's own height
+(within 0.3 cm).
 
-**What findings 18/22 change:** the shaping is **linear in the coefficients**,
-and the fields ship with the CLO installation. The field order is
+**What findings 18/22 change (5.2 backup route):** the shaping there is **linear in
+the coefficients**, and the 5.2 fields ship with the CLO installation. The field order is
 the ID order of the measurements, the last field has the coefficient 1.0, and
 `DETAIL_Advanced_TotalHeight` reproduces `BaseMesh.obj` to 0.00014 cm.
-No hand-tuned deformation is needed — CLO's own fields are the
-template.
+No hand-tuned deformation is needed — those fields are the
+template. The reference folder has replaced them by matrices computed at load time
+(`kette_referenz.rs`, finding 64); this section describes `anpassen.rs` only.
 
-**Integration (in order):**
+**Integration of the 5.2 route (in order):**
 
 1. Load `BaseMesh.obj` and the 33 fields of `DETAIL_Advanced_TotalHeight`
    (format: `int32 fields, int32 vectors`, then `f32` feature by feature).
