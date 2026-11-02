@@ -230,11 +230,23 @@ impl Auswertung<'_> {
         } else {
             self.zu_px(self.von_px(laengen.iter().sum()) - vier_stellen)
         };
+        self.kurve_teilen_px(cid, &segmente, &laengen, laenge)
+    }
 
+    /// The curve `cid` split at `laenge` pixels from its start, with the
+    /// 1 mm clamp of `CutSpline`/`CutSplinePath` but without the four-digit
+    /// rounding of a formula (the caller decides about that).
+    fn kurve_teilen_px(
+        &self,
+        cid: &str,
+        segmente: &[[[f64; 2]; 4]],
+        laengen: &[f64],
+        laenge: f64,
+    ) -> Result<(Vec<[Pt; 4]>, Vec<[Pt; 4]>), GeomError> {
         let treffer = if segmente.len() == 1 {
             cut_teile(segmente[0], laenge).map(|(kopf, schwanz)| (0, kopf, schwanz))
         } else {
-            cut_pfad_teile(&segmente, &laengen, laenge)
+            cut_pfad_teile(segmente, laengen, laenge)
         };
         let (i, kopf, schwanz) = treffer.ok_or_else(|| GeomError::Geometrie {
             kind: "Schnitt",
@@ -297,7 +309,12 @@ impl Auswertung<'_> {
     /// 0,011 bis 0,275 mm daneben; im Randfall-Muster lagen fünf von 26 auf dem
     /// falschen Treffer, bis 89,24 mm.
     pub fn achsenschnitt(&self, cid: &str, basis: Pt, winkel: f64) -> Result<Pt, GeomError> {
-        let zug = self.seamly_zug(cid)?;
+        let q = self.achsenschnitt_px(&self.seamly_zug(cid)?, cid, basis, winkel)?;
+        Ok(Pt::new(self.von_px(q[0]), self.von_px(q[1])))
+    }
+
+    /// [`Self::achsenschnitt`] on the given polyline, in pixels.
+    fn achsenschnitt_px(&self, zug: &[[f64; 2]], cid: &str, basis: Pt, winkel: f64) -> Result<[f64; 2], GeomError> {
         let b = [self.zu_px(basis.x), self.zu_px(basis.y)];
         let mut treffer: Vec<[f64; 2]> = Vec::new();
         for grad in [winkel, winkel + 180.0] {
@@ -334,7 +351,68 @@ impl Auswertung<'_> {
             .iter()
             .reduce(|a, c| if abstand(*c) <= abstand(*a) { c } else { a })
             .unwrap();
-        Ok(Pt::new(self.von_px(naechster[0]), self.von_px(naechster[1])))
+        Ok(naechster)
+    }
+
+    /// The curve a `curveIntersectAxis` point cuts, its polyline and the
+    /// point on it, in pixels.
+    fn achsen_daten<'p>(&self, p: &'p Point) -> Result<(&'p str, Vec<[f64; 2]>, [f64; 2]), GeomError> {
+        let cid = p.curve.as_deref().filter(|s| !s.is_empty()).ok_or(GeomError::Geometrie {
+            kind: "Achsenschnitt",
+            grund: "@curve fehlt".into(),
+        })?;
+        let basis = self.bez_pt(p.base_point.as_deref(), "basePoint")?;
+        let winkel = self.feld(&p.angle, "angle")?;
+        let zug = self.seamly_zug(cid)?;
+        let q = self.achsenschnitt_px(&zug, cid, basis, winkel)?;
+        Ok((cid, zug, q))
+    }
+
+    /// Length in pixels at which Seamly2D cuts the curve of the
+    /// `curveIntersectAxis` point `p` into its two sub-curves
+    /// (`vtoolcurveintersectaxis.cpp: Create` → `GetLengthByPoint`), together
+    /// with the curve id and the point itself.
+    pub fn achsen_schnittlaenge<'p>(&self, p: &'p Point) -> Result<(&'p str, f64, [f64; 2]), GeomError> {
+        let (cid, zug, q) = self.achsen_daten(p)?;
+        let laenge = laenge_bis_punkt(&zug, q).ok_or_else(|| GeomError::Geometrie {
+            kind: "Achsenschnitt",
+            grund: format!(
+                "Punkt {} liegt nicht auf dem Streckenzug von Kurve {cid} — Seamly2D legt leere Teilkurven an",
+                p.id
+            ),
+        })?;
+        Ok((cid, laenge, q))
+    }
+
+    /// The two sub-curves of a `curveIntersectAxis` point on a spline or a
+    /// path, as Seamly2D registers them under point id + 1 and + 2
+    /// (`vtoolcurveintersectaxis.cpp: InitSegments`):
+    ///
+    /// * the curve is cut at the length up to the point
+    ///   ([`Self::achsen_schnittlaenge`]) with the regular 1 mm clamp, but
+    ///   without rounding to four digits;
+    /// * a **spline** keeps the inner control points of that cut, but its two
+    ///   parts end and start at the **axis point** itself;
+    /// * a **path** is split by `VToolCutSplinePath::CutSplinePath`, so its
+    ///   parts meet at the cut point, which can sit up to 0.1 % of the length
+    ///   beside the axis point.
+    pub fn achsen_teilkurven(&self, p: &Point) -> Result<(Vec<[Pt; 4]>, Vec<[Pt; 4]>), GeomError> {
+        let (cid, laenge, q) = self.achsen_schnittlaenge(p)?;
+        let segmente = self.kontrollen_px(cid)?;
+        if segmente.is_empty() {
+            return Err(GeomError::Geometrie {
+                kind: "Achsenschnitt",
+                grund: format!("Kurve {cid} ohne Segment lässt sich nicht schneiden"),
+            });
+        }
+        let laengen: Vec<f64> = segmente.iter().map(|k| laenge_px(*k)).collect();
+        let (mut a, mut b) = self.kurve_teilen_px(cid, &segmente, &laengen, laenge)?;
+        if !self.ist_pfad(cid) {
+            let punkt = Pt::new(self.von_px(q[0]), self.von_px(q[1]));
+            a[0][3] = punkt;
+            b[0][0] = punkt;
+        }
+        Ok((a, b))
     }
 
     /// Schnittpunkt zweier Kreisbögen (`pointOfIntersectionArcs`), dort, wo
@@ -475,6 +553,68 @@ impl Auswertung<'_> {
             andere => Err(GeomError::UnsupportedPointType(andere.to_string())),
         }
     }
+}
+
+/// `accuracyPointOnLine` in pixels: 0.1555 mm at 96 dpi.
+const AUF_LINIE_PX: f64 = 0.1555 / 25.4 * 96.0;
+
+/// `QPointF::toPoint()`: both coordinates rounded with `qRound`.
+fn ganzzahlig(p: [f64; 2]) -> [i64; 2] {
+    [(p[0] + 0.5).floor() as i64, (p[1] + 0.5).floor() as i64]
+}
+
+/// Does `t` lie on the segment `p1`–`p2`, the way Seamly2D asks it
+/// (`vgobject.cpp: IsPointOnLineSegment`)? Inside the bounding box, each
+/// side widened by the accuracy only where the box misses, and then at most
+/// the accuracy away from the **line** (perp dot product against the area of
+/// a perpendicular of that length).
+fn auf_strecke_seamly(t: [f64; 2], p1: [f64; 2], p2: [f64; 2]) -> bool {
+    for k in 0..2 {
+        let drin = (p1[k] <= t[k] && t[k] <= p2[k]) || (p2[k] <= t[k] && t[k] <= p1[k]);
+        if !drin && (p1[k] - t[k]).abs() > AUF_LINIE_PX && (p2[k] - t[k]).abs() > AUF_LINIE_PX {
+            return false;
+        }
+    }
+    let pdp = |a: [f64; 2], b: [f64; 2], t: [f64; 2]| (a[0] - t[0]) * (b[1] - t[1]) - (a[1] - t[1]) * (b[0] - t[0]);
+    let p = pdp(p1, p2, t).abs();
+    // `GetEpsilon`: the same product for a point at the accuracy distance
+    // perpendicular to the segment, i.e. its length times the accuracy.
+    let e = ((p2[0] - p1[0]).powi(2) + (p2[1] - p1[1]).powi(2)).sqrt() * AUF_LINIE_PX;
+    let fast_gleich = |a: f64, b: f64| {
+        if a.abs() <= 1e-12 {
+            return b.abs() <= 1e-12;
+        }
+        if b.abs() <= 1e-12 {
+            return false;
+        }
+        (a - b).abs() * 1e12 <= a.abs().min(b.abs())
+    };
+    p < e || fast_gleich(p, e)
+}
+
+/// Length along the polyline `zug` from its start to the point `p`, as
+/// `VAbstractCurve::GetLengthByPoint` measures it (pixels):
+///
+/// * 0, when the start rounds to the same whole pixel as `p`;
+/// * the whole length, when the end does (`ToEnd` keeps the polyline);
+/// * otherwise up to the **last** segment that holds `p` (`ToEnd` searches
+///   from the end) plus the piece of that segment up to `p`;
+/// * `None` (Seamly2D: −1) when no segment holds it.
+pub fn laenge_bis_punkt(zug: &[[f64; 2]], p: [f64; 2]) -> Option<f64> {
+    if zug.len() < 2 {
+        return None;
+    }
+    let abstand = |a: [f64; 2], b: [f64; 2]| ((b[0] - a[0]).powi(2) + (b[1] - a[1]).powi(2)).sqrt();
+    if ganzzahlig(zug[0]) == ganzzahlig(p) {
+        return Some(0.0);
+    }
+    let bis = |j: usize| zug[..=j].windows(2).map(|w| abstand(w[0], w[1])).sum::<f64>();
+    let n = zug.len();
+    if ganzzahlig(zug[n - 1]) == ganzzahlig(p) {
+        return Some(bis(n - 1));
+    }
+    let j = (0..n - 1).rev().find(|&j| auf_strecke_seamly(p, zug[j + 1], zug[j]))?;
+    Some(bis(j) + if p == zug[j] { 0.0 } else { abstand(zug[j], p) })
 }
 
 /// Eine Schnittlänge, wie Seamly2D sie nimmt: `QString::number(x, 'f', 4)

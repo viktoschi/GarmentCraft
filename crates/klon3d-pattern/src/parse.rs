@@ -351,6 +351,7 @@ fn parse(xml: &str) -> Result<Pattern, PatternError> {
                         let mut s = from_map!(Spline, &m,
                             kind => "type", name => "name",
                             point1 => "point1", point4 => "point4",
+                            point2 => "point2", point3 => "point3",
                             point1_line => "point1Line", point2_line => "point2Line",
                             angle1 => "angle1", angle2 => "angle2",
                             length1 => "length1", length2 => "length2",
@@ -567,12 +568,16 @@ fn parse(xml: &str) -> Result<Pattern, PatternError> {
                 }
 
                 if war_leer {
+                    // An empty text element (`<measurements/>`) has no text;
+                    // left open, it would take the next text of the file.
+                    textfeld = None;
                     schliesse(&name, &mut stapel);
                     tiefe -= 1;
                 }
             }
 
             Event::End(ref e) => {
+                textfeld = None;
                 tiefe -= 1;
                 schliesse(&name_of_end(e), &mut stapel);
             }
@@ -585,7 +590,9 @@ fn parse(xml: &str) -> Result<Pattern, PatternError> {
                     match feld {
                         "version" => pat.version = wert.trim().to_owned(),
                         "unit" => pat.unit = wert.trim().to_owned(),
-                        "measurements" => pat.measurements = Some(wert.trim().to_owned()),
+                        "measurements" => {
+                            pat.measurements = Some(wert.trim().to_owned()).filter(|w| !w.is_empty())
+                        }
                         _ => {}
                     }
                     textfeld = None;
@@ -697,6 +704,26 @@ mod tests {
         // Stuecke liegen am Block, nicht am Muster.
         assert_eq!(p.draft_blocks[0].pieces.as_ref().unwrap().items.len(), 1);
         assert_eq!(p.unit_to_mm().unwrap(), 10.0);
+    }
+
+    /// `<measurements/>` names no file. It used to take the next text of the
+    /// file instead (a pattern read "…\1540" as its measurement file).
+    #[test]
+    fn empty_measurements_name_no_file() {
+        let xml = r##"<?xml version="1.0" encoding="UTF-8"?>
+<pattern>
+    <version>0.7.2</version>
+    <unit>mm</unit>
+    <description>text</description>
+    <measurements/>
+    <patternNumber>1540</patternNumber>
+    <variables><variable name="#A" formula="1"/></variables>
+</pattern>"##;
+        let p = read_str(xml).expect("must read");
+        assert_eq!(p.measurements, None);
+        assert_eq!(p.unit, "mm");
+        let xml = MINIMAL.replace("<measurements>/pfad/measurements.smis</measurements>", "<measurements> </measurements>");
+        assert_eq!(read_str(&xml).unwrap().measurements, None);
     }
 
     #[test]

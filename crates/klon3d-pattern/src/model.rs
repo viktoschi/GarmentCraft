@@ -333,6 +333,11 @@ pub struct Spline {
     pub point1: Option<String>,
     #[serde(rename = "@point4", default)]
     pub point4: Option<String>,
+    /// The two inner control points of a `cubicBezier`.
+    #[serde(rename = "@point2", default)]
+    pub point2: Option<String>,
+    #[serde(rename = "@point3", default)]
+    pub point3: Option<String>,
     #[serde(rename = "@point1Line", default)]
     pub point1_line: Option<String>,
     #[serde(rename = "@point2Line", default)]

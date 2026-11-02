@@ -104,15 +104,15 @@ impl Auswertung<'_> {
             return self.spline_kontrollen(s);
         }
         if let Some((p, teil)) = self.teilkurve_von(cid) {
-            let quelle = p
-                .spline
-                .as_deref()
-                .filter(|s| !s.is_empty())
-                .or(p.spline_path.as_deref().filter(|s| !s.is_empty()))
-                .ok_or(GeomError::Geometrie { kind: "Schnitt", grund: "weder @spline noch @splinePath gesetzt".into() })?;
-            let laenge = self.feld(&p.length, "length")?;
-            let vorwaerts = p.direction.as_deref().map(|d| d == "forward").unwrap_or(true);
-            let (a, b) = self.kurve_teilen(quelle, laenge, vorwaerts)?;
+            let (a, b) = if p.kind == "curveIntersectAxis" {
+                self.achsen_teilkurven(p)?
+            } else {
+                let quelle = geschnittene_kurve(p)
+                    .ok_or(GeomError::Geometrie { kind: "Schnitt", grund: "weder @spline noch @splinePath gesetzt".into() })?;
+                let laenge = self.feld(&p.length, "length")?;
+                let vorwaerts = p.direction.as_deref().map(|d| d == "forward").unwrap_or(true);
+                self.kurve_teilen(quelle, laenge, vorwaerts)?
+            };
             return Ok(if teil == 1 { a } else { b });
         }
         if let Some((op, q)) = self.kopie(cid) {
@@ -138,7 +138,10 @@ impl Auswertung<'_> {
     pub fn ist_pfad(&self, cid: &str) -> bool {
         let u = self.urquelle(cid);
         if let Some((p, _)) = self.teilkurve_von(u) {
-            return p.kind == "cutSplinePath";
+            return match p.kind.as_str() {
+                "curveIntersectAxis" => geschnittene_kurve(p).is_some_and(|k| self.ist_pfad(k)),
+                andere => andere == "cutSplinePath",
+            };
         }
         self.spline(u)
             .is_some_and(|s| matches!(s.kind.as_deref(), Some("pathInteractive") | Some("cubicBezierPath")))
@@ -158,7 +161,7 @@ impl Auswertung<'_> {
             let (pid, teil) = rest.rsplit_once(':')?;
             let teil: u8 = teil.parse().ok().filter(|t| (1..=2).contains(t))?;
             let p = *self.punkte.get(pid)?;
-            return matches!(p.kind.as_str(), "cutSpline" | "cutSplinePath").then_some((p, teil));
+            return self.teilt_spline(p).then_some((p, teil));
         }
         if self.splines_enthaelt(id) {
             return None;
@@ -167,8 +170,19 @@ impl Auswertung<'_> {
         (1..=2u8).find_map(|teil| {
             let pid = n.checked_sub(teil as u64)?.to_string();
             let p = *self.punkte.get(&pid)?;
-            matches!(p.kind.as_str(), "cutSpline" | "cutSplinePath").then_some((p, teil))
+            self.teilt_spline(p).then_some((p, teil))
         })
+    }
+
+    /// Does the point `p` split a spline or a path into two sub-curves?
+    /// `cutSpline` and `cutSplinePath` always, `curveIntersectAxis` when its
+    /// curve is one (on an arc it makes sub-arcs, [`Self::teilbogen_von`]).
+    fn teilt_spline(&self, p: &crate::model::Point) -> bool {
+        match p.kind.as_str() {
+            "cutSpline" | "cutSplinePath" => true,
+            "curveIntersectAxis" => geschnittene_kurve(p).is_some_and(|k| self.ist_spline(k)),
+            _ => false,
+        }
     }
 
     fn splines_enthaelt(&self, id: &str) -> bool {
@@ -181,7 +195,7 @@ impl Auswertung<'_> {
     pub fn abgeleitete_kurven(&self) -> Vec<String> {
         let mut ids: Vec<String> = self.kopie_von.keys().filter(|z| self.ist_spline(z)).cloned().collect();
         for (pid, p) in &self.punkte {
-            if matches!(p.kind.as_str(), "cutSpline" | "cutSplinePath") {
+            if self.teilt_spline(p) {
                 ids.extend([format!("teil:{pid}:1"), format!("teil:{pid}:2")]);
             }
         }
@@ -231,14 +245,23 @@ impl Auswertung<'_> {
         Err(GeomError::UnknownPoint(format!("Bogen {id}")))
     }
 
-    /// Der `cutArc`-Punkt, dessen Teilbogen `teil` (1 oder 2) die id `id`
-    /// trägt (Punkt-id + `teil`).
+    /// Der `cutArc`- oder `curveIntersectAxis`-Punkt (auf einem Bogen), dessen
+    /// Teilbogen `teil` (1 oder 2) die id `id` trägt (Punkt-id + `teil`).
     pub fn teilbogen_von(&self, id: &str) -> Option<(&crate::model::Point, u8)> {
         let n: u64 = id.parse().ok()?;
         (1..=2u8).find_map(|teil| {
             let pid = n.checked_sub(teil as u64)?.to_string();
             let p = *self.punkte.get(&pid)?;
-            (p.kind == "cutArc").then_some((p, teil))
+            let bogen = match p.kind.as_str() {
+                "cutArc" => true,
+                // Only where the file leaves the id free: a spline or a point
+                // under it must not turn into a sub-arc.
+                "curveIntersectAxis" => {
+                    !self.splines_enthaelt(id) && geschnittene_kurve(p).is_some_and(|k| k != id && self.ist_bogen(k))
+                }
+                _ => false,
+            };
+            bogen.then_some((p, teil))
         })
     }
 
@@ -246,8 +269,28 @@ impl Auswertung<'_> {
     /// der erste läuft vom Startwinkel bis zum Schnitt, der zweite vom
     /// Schnitt bis zum Endwinkel; beide behalten Mitte, Radius und
     /// Laufrichtung. Der Schnittwinkel ist der von `QLineF`, 0 bis unter 360.
+    ///
+    /// A `curveIntersectAxis` on an arc cuts it at the length up to the
+    /// axis point (`GetLengthByPoint`), with the same clamp as `cutArc` but
+    /// without the four-digit rounding (`vtoolcurveintersectaxis.cpp:
+    /// InitArc`).
     pub fn teilbogen(&self, p: &crate::model::Point, teil: u8) -> Result<Bogendaten, GeomError> {
-        let (d, w) = self.bogen_schnittwinkel(p)?;
+        let (d, w) = if p.kind == "curveIntersectAxis" {
+            let (cid, laenge, _) = self.achsen_schnittlaenge(p)?;
+            let d = self.bogen_daten_id(cid)?;
+            let radius = self.zu_px(d.radius);
+            let mut voll = radius * Self::seamly_bogen_winkel(d.f1, d.f2, d.flipped).to_radians();
+            if d.flipped {
+                voll = -voll;
+            }
+            let w = Self::seamly_cut_arc(d.f1, radius, voll, d.flipped, laenge).ok_or_else(|| GeomError::Geometrie {
+                kind: "curveIntersectAxis",
+                grund: format!("Bogen {cid} ist zu kurz zum Schneiden"),
+            })?;
+            (d, w)
+        } else {
+            self.bogen_schnittwinkel(p)?
+        };
         let w = Self::qline_winkel(w);
         Ok(if teil == 1 { Bogendaten { f2: w, ..d } } else { Bogendaten { f1: w, ..d } })
     }
@@ -260,12 +303,7 @@ impl Auswertung<'_> {
             return Some((format!("{a}{}", op.suffix), format!("{b}{}", op.suffix)));
         }
         if let Some((p, teil)) = self.teilkurve_von(cid) {
-            let quelle = p
-                .spline
-                .as_deref()
-                .filter(|s| !s.is_empty())
-                .or(p.spline_path.as_deref().filter(|s| !s.is_empty()))?;
-            let (a, b) = self.kurven_enden(quelle)?;
+            let (a, b) = self.kurven_enden(geschnittene_kurve(p)?)?;
             let schnitt = p.name.clone()?;
             return Some(if teil == 1 { (a, schnitt) } else { (schnitt, b) });
         }
@@ -277,5 +315,17 @@ impl Auswertung<'_> {
             (s.point1.as_deref()?, s.point4.as_deref()?)
         };
         Some((self.punkt_name(a)?.to_string(), self.punkt_name(b)?.to_string()))
+    }
+}
+
+/// The curve a cutting point splits: `@spline` or `@splinePath` of a
+/// `cutSpline`/`cutSplinePath`, `@curve` of a `curveIntersectAxis`.
+fn geschnittene_kurve(p: &crate::model::Point) -> Option<&str> {
+    fn feld(f: &Option<String>) -> Option<&str> {
+        f.as_deref().filter(|s| !s.is_empty())
+    }
+    match p.kind.as_str() {
+        "curveIntersectAxis" => feld(&p.curve),
+        _ => feld(&p.spline).or(feld(&p.spline_path)),
     }
 }

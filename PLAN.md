@@ -83,13 +83,31 @@ Formula engine: lexer, recursive descent, QMuParser dialect, 9 tests green.
 | Data model | `pattern`, `increments`, `draftBlock`, `pieces` | `male_shirt.sm2d` and `Bluse3_Plunge_Cups_parametrisch_v2.sm2d` parse |
 | XML reader | quick-xml, attributes as `Option<f64>` | — |
 | Point types | `single` `endLine` `alongLine` `normal` `shoulder` `height` `lineIntersectAxis` `curveIntersectAxis` `cutSpline` `modeling`; since finding 99 also `cutArc`, `pointOfIntersectionArcs`, `pointOfIntersectionCurves`, `trueDarts` | points agree with `schnitt.py` to 0.01 mm |
-| Operations and sub-curves | `moving`, `rotation`, `flippingByAxis`, `flippingByLine` with point and curve copies (name + suffix); sub-curves of `cutSpline`/`cutSplinePath` and sub-arcs of `cutArc` for `Spl_`, `SplPath_`, `Arc_` | **done** (finding 99): Bolero v36/v37 and stocking v26 without errors, perimeters as in Seamly2D's own export (≤ 0.03 mm); open: sub-curves of `curveIntersectAxis`, L036 (18 measurements missing) |
-| Splines and arcs | `NodeSpline`, `NodeSplinePath`, arcs | — |
+| Operations and sub-curves | `moving`, `rotation`, `flippingByAxis`, `flippingByLine` with point and curve copies (name + suffix); sub-curves of `cutSpline`/`cutSplinePath` and sub-arcs of `cutArc` for `Spl_`, `SplPath_`, `Arc_` | **done** (finding 99): Bolero v36/v37 and stocking v26 without errors, perimeters as in Seamly2D's own export (≤ 0.03 mm). **Since #42 (finding 123) also the sub-curves of `curveIntersectAxis`** (spline, path and arc, cut at the length up to the axis point as Seamly2D does; spline parts end at the axis point, path parts at the cut point) |
+| Splines and arcs | `NodeSpline`, `NodeSplinePath`, arcs (orientation: finding 16); since #42 `cubicBezier` with its four control points and `cubicBezierPath` as segments of 3k..3k+3 (both were read wrongly before) | — |
+| L036 (third-party, mm) | the only pattern with `trueDarts`, `cubicBezier`, `cubicBezierPath` and formulas on axis sub-curves; checked with a synthetic body against Seamly2D's export (`tests/l036_seamly.rs`, skips without the pattern) | **#42, finding 123**: all 204 named points within 7e-5 mm of Seamly2D (probe pieces, one per point), 4 of 5 seam lines ≤ 0.08 mm. **Open:** "L036 - back" — its centre back overlaps itself and Seamly2D removes the loop from the seam line (`CheckLoops`, 2294.16 against 2727.4 mm); klon3d removes no loops yet |
 | `idObject` resolution | piece nodes → outline paths | piece outlines close |
 | Seam allowance | `seamAllowance` bool, `width` as a formula, `<CSA>` | width computable |
 
 **Acceptance criterion:** the piece outlines of 10 patterns match `schnitt.py
 piece_outline`.
+
+**Findings behind this stage:** 07 (the `.sm2d` format, read from Seamly2D's
+parser); 13 (`schnitt.py` is a transliteration of Seamly2D's C++ and therefore
+the yardstick for points; not where two operations share a suffix — it copies
+every name under every suffix, in L036 `Ps` comes out 75 mm off); 14 (the five
+reader faults found on the blouses: `@` in names, path handle lengths,
+`SplPath_` decomposition, the sign in the quadratic, the counter-ray);
+16 (arcs were mirrored at the horizontal through their centre, collar
+11,270.8 instead of 829.0 mm); 99 (operations, sub-curves, `cutArc`,
+intersections of arcs and curves, `trueDarts`); 123 (#42: sub-curves of
+`curveIntersectAxis`, `cubicBezier` and `cubicBezierPath`, L036 against
+Seamly2D with probe pieces, one per point).
+
+`klon3d umriss` shows the Seamly outline since #42 (the one seams and mesh
+use), the drawn one only where a piece cannot be resolved; the bishop sleeve of
+Bolero v37 reads 1418.6 mm as in Seamly2D instead of the zigzag 2142.7. An
+empty `<measurements/>` no longer takes the next text of the file as its path.
 
 ## Stage 2 — Measurements and body
 

@@ -84,32 +84,19 @@ impl Auswertung<'_> {
                 ]])
             }
 
-            "cubicBezier" => {
-                let mut k = [Pt::new(0.0, 0.0); 4];
-                let felder: [Option<&String>; 4] = [
-                    s.point1.as_ref(),
-                    s.point2_line.as_ref(),
-                    None,
-                    s.point4.as_ref(),
-                ];
-                // `cubicBezier` nennt seine vier Punkte `point1`..`point4`.
-                let _ = felder;
-                k[0] = self.bez_pt(s.point1.as_deref(), "point1")?;
-                k[3] = self.bez_pt(s.point4.as_deref(), "point4")?;
-                if let Some(v) = &s.c_radius {
-                    // `cRadius` ist bei `cubicBezier` der zweite Kontrollpunkt.
-                    let _ = v;
-                }
-                if let Some(id) = s.point2_line.as_ref() {
-                    k[1] = self.bez_pt(Some(id), "point2")?;
-                }
-                if let Some(id) = s.point1_line.as_ref() {
-                    k[2] = self.bez_pt(Some(id), "point3")?;
-                }
-                Ok(vec![k])
-            }
+            // `cubicBezier` names its four control points `point1`..`point4`
+            // (`vpattern.cpp: ParseToolCubicBezier`). It used to read the two
+            // inner ones from attributes that do not exist and put them at
+            // the origin: in L036 a cut on such a spline sat 109 mm off.
+            "cubicBezier" => Ok(vec![[
+                self.bez_pt(s.point1.as_deref(), "point1")?,
+                self.bez_pt(s.point2.as_deref(), "point2")?,
+                self.bez_pt(s.point3.as_deref(), "point3")?,
+                self.bez_pt(s.point4.as_deref(), "point4")?,
+            ]]),
 
-            "pathInteractive" | "cubicBezierPath" => self.pfad_kontrollen(s),
+            "pathInteractive" => self.pfad_kontrollen(s),
+            "cubicBezierPath" => self.bezierpfad_kontrollen(s),
 
             "modelingSpline" | "modelingPath" => Err(GeomError::Geometrie {
                 kind: "Kurve",
@@ -177,6 +164,30 @@ impl Auswertung<'_> {
             ]);
         }
         Ok(segmente)
+    }
+
+    /// Control points of a `cubicBezierPath`: its `<pathPoint>`s are the
+    /// control points themselves, without handles, and segment `k` runs over
+    /// points `3k` to `3k + 3` (`vcubicbezierpath.cpp: GetSpline,
+    /// CountSubSpl`; points past the last full segment do not count). It
+    /// used to be read like a `pathInteractive`, as a curve through every
+    /// point: in L036 a cut on such a path sat 11 mm off.
+    pub fn bezierpfad_kontrollen(&self, s: &Spline) -> Result<Vec<[Pt; 4]>, GeomError> {
+        let punkte = s
+            .path_points
+            .iter()
+            .filter_map(|p| p.p_spline.as_deref())
+            .map(|id| self.bez_pt(Some(id), "pSpline"))
+            .collect::<Result<Vec<Pt>, GeomError>>()?;
+        if punkte.len() < 4 {
+            return Err(GeomError::Geometrie {
+                kind: "Pfad",
+                grund: format!("Bézier-Pfad {} mit {} Punkten, mindestens 4 nötig", s.id, punkte.len()),
+            });
+        }
+        Ok((0..(punkte.len() - 1) / 3)
+            .map(|k| [punkte[3 * k], punkte[3 * k + 1], punkte[3 * k + 2], punkte[3 * k + 3]])
+            .collect())
     }
 
     /// Zulauf- und Ablaufwinkel eines Pfadknotens, wie Seamly2D sie führt.

@@ -1283,11 +1283,21 @@ fn befehl_umriss(args: &[String]) -> ExitCode {
     let teile = muster.pieces().to_vec();
     let mut gesamt_ungeloest = 0usize;
     let mut schranke: Option<[f64; 4]> = None;
+    let mut umrisse = Vec::with_capacity(teile.len());
 
     for t in &teile {
         let (knoten, meldung) = ev.stueck_knoten(t);
-        let umriss = ev.umriss_aus_knoten(&knoten);
+        // The seam line as Seamly2D builds it on its own curve polylines, the
+        // same one seams and mesh use. The drawn curves only where the piece
+        // cannot be resolved: there, notches on a curve named several times
+        // miss the drawing and the edge runs in a zigzag (bishop sleeve of
+        // Bolero v37: 2142.7 instead of 1418.6 mm).
+        let umriss = match ev.teilrand(t, klon3d_pattern::kanten::Kurvenquelle::Seamly) {
+            Ok(r) => r.umriss,
+            Err(_) => ev.umriss_aus_knoten(&knoten),
+        };
         gesamt_ungeloest += meldung.len();
+        umrisse.push(umriss.clone());
 
         if umriss.len() < 3 {
             println!(
@@ -1365,8 +1375,7 @@ fn befehl_umriss(args: &[String]) -> ExitCode {
             "  <!-- Nahtlinien, Einheit mm, y nach unten wie in der .sm2d -->\n  <g fill=\"none\" \
              stroke=\"black\" stroke-width=\"0.3\">\n"
         ));
-        for t in &teile {
-            let umriss = ev.stueck_umriss(t).unwrap_or_default();
+        for umriss in &umrisse {
             if umriss.len() < 3 {
                 continue;
             }
