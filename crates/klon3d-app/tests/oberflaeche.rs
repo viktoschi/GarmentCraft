@@ -238,7 +238,7 @@ fn menues_und_gesperrte_eintraege() {
             &["Seamly2D-Muster (.sm2d)…"],
             &["CLO-Projekt (.zprj)…"],
         ),
-        (&["Datei", "Export"], &[], &["OBJ…", "DXF…"]),
+        (&["Datei", "Export"], &["OBJ…", "DXF…"], &[]),
         (
             &["Bearbeiten"],
             &["Auswahl aufheben Esc"],

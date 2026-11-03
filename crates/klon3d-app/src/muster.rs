@@ -649,6 +649,93 @@ pub fn netz_pruefen(auftrag: &Netzauftrag) -> Result<Netzpruefung, String> {
     ergebnis.unwrap_or_else(|_| Err(format!("{name}: interner Fehler bei der Netzprüfung")))
 }
 
+/// The DXF of a pattern: what `klon3d dxf` writes, as bytes and the number of pieces, so that the
+/// window can write the file itself.
+///
+/// The same steps as in `klon3d-cli`'s `befehl_dxf`, without the `--teile` filter: every piece
+/// with an outline, its notch points, and the whole arrangement moved to the origin. Written with
+/// [`klon3d_pipeline::dxf::schreibe`], so the bytes are the ones the command line writes.
+#[derive(Debug, Clone)]
+pub struct Dxfausgabe {
+    pub bytes: Vec<u8>,
+    /// Pieces written.
+    pub teile: usize,
+    /// Pieces left out (fewer than three points) and notches that missed the outline.
+    pub hinweise: Vec<String>,
+}
+
+/// Writes what `klon3d dxf` writes for `muster_pfad` with `massdatei`.
+pub fn dxf_ausgabe(muster_pfad: &Path, massdatei: &Path) -> Result<Dxfausgabe, String> {
+    let name = dateiname(muster_pfad);
+    catch_unwind(AssertUnwindSafe(|| -> Result<Dxfausgabe, String> {
+        let m = klon3d_pipeline::Muster::laden(muster_pfad, Some(massdatei))
+            .map_err(|e| format!("{name}: {e}"))?;
+        // The same preparation as `klon3d dxf` ([`klon3d_pipeline::Muster::dxf_teile`]), all
+        // pieces, so the bytes are the ones the command line writes.
+        let vorbereitet = m
+            .dxf_teile(|_: &klon3d_pattern::Piece| true)
+            .map_err(|e| format!("{name}: {e}"))?;
+        let mut hinweise = Vec::new();
+        let mut teile = Vec::new();
+        for d in vorbereitet {
+            if d.uebergangen {
+                hinweise.push(format!(
+                    "{}: übergangen, {} Punkte, {} Knoten offen",
+                    d.teil.name,
+                    d.teil.kante.len(),
+                    d.offene.len()
+                ));
+                continue;
+            }
+            hinweise.extend(d.offene.iter().map(|m| format!("{}: {m}", d.teil.name)));
+            hinweise.extend(
+                d.daneben
+                    .iter()
+                    .map(|m| format!("{}: Passzeichen fehlt, {m}", d.teil.name)),
+            );
+            teile.push(d.teil);
+        }
+        if teile.is_empty() {
+            return Err(format!("{name}: kein Teil zu schreiben"));
+        }
+        Ok(Dxfausgabe {
+            bytes: klon3d_pipeline::dxf::schreibe(&teile),
+            teile: teile.len(),
+            hinweise,
+        })
+    }))
+    .unwrap_or_else(|_| Err(format!("{name}: interner Fehler beim DXF-Export")))
+}
+
+/// The pattern as OBJ: its flat mesh, as `klon3d netz --obj` writes it. The number returned is the
+/// number of points, so the window can say what it wrote.
+pub fn obj_aus_muster(auftrag: &Netzauftrag) -> Result<(String, usize), String> {
+    let name = dateiname(&auftrag.muster);
+    catch_unwind(AssertUnwindSafe(|| -> Result<(String, usize), String> {
+        let nahtliste = auftrag
+            .nahtliste
+            .clone()
+            .map_err(|t| format!("Nahtliste nicht verwendbar: {t}"))?;
+        let m = klon3d_pipeline::Muster::laden(&auftrag.muster, Some(&auftrag.massdatei))
+            .map_err(|e| format!("{name}: {e}"))?;
+        let defs = match &nahtliste {
+            Some(p) => klon3d_pipeline::nahtliste(p).map_err(|e| e.to_string())?,
+            None => Vec::new(),
+        };
+        let netz = m
+            .netz(&defs, &klon3d_mesh::Parameter::default())
+            .map_err(|e| format!("{name}: {e}"))?;
+        let punkte = netz.teile.iter().map(|t| t.punkte.len()).sum();
+        // `klon3d netz --obj` writes the same mesh; its bytes stay as they are, so the note that
+        // this is not a simulated scene goes in as one more comment line after the header.
+        let mut text = klon3d_mesh::ausgabe::obj(&netz);
+        let ende = text.find('\n').map_or(0, |i| i + 1);
+        text.insert_str(ende, "# ohne Simulation: flaches Musternetz des Schnitts\n");
+        Ok((text, punkte))
+    }))
+    .unwrap_or_else(|_| Err(format!("{name}: interner Fehler beim OBJ-Export")))
+}
+
 /// Read and check the seam list, as `klon3d naehte` does.
 fn nahtstand(ev: &Auswertung<'_>, muster_pfad: &Path, gewaehlt: Option<&Path>) -> Nahtstand {
     let pfad = match gewaehlt {

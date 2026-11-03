@@ -36,7 +36,8 @@ Several agents work on this repository at the same time. How tasks are handed ou
 | Pieces to triangle meshes, seam point pairs | `klon3d-mesh` | `src/lib.rs`, `src/rand.rs` | `tests/naht_synthetisch.rs`, `tests/bluse3_v2.rs` |
 | Solver: implicit CG (main path), XPBD (cross-check), body contact | `klon3d-sim` | `src/lib.rs`, `src/implizit.rs` | `tests/implizit.rs`, `tests/roehre.rs`, `tests/selbstkollision.rs` |
 | Viewer (Win32/GDI, Windows only) | `klon3d-view` | `src/main.rs` | by eye |
-| Command line `klon3d` | `klon3d-cli` | `src/main.rs`, `src/anziehen.rs`, `src/dxf.rs` | `tests/` |
+| Command line `klon3d` | `klon3d-cli` | `src/main.rs`, `src/anziehen.rs` | `tests/` |
+| Everything from `.sm2d` to a placed scene, and the DXF writer | `klon3d-pipeline` | `src/lib.rs`, `src/dxf.rs` | `tests/` |
 
 ## Shared files
 

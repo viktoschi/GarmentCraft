@@ -397,8 +397,8 @@ nested `egui::Panel` stores its size from the first frame, which can be tiny –
 
 First slice of stage 6 in PLAN.md: an `eframe` window with the `wgpu` renderer and the layout the user asked
 for on 2026-10-20 – **dark design** (switchable to light, saved), **menus**, **buttons** – working on the
-2D pattern. The 3D view, the simulation, fabric and body came with #56 (2026-11-03); OBJ/DXF export and
-the maps are later tasks (#57, #58) and their menu entries are still disabled.
+2D pattern. The 3D view, the simulation, fabric and body came with #56 (2026-11-03), OBJ/DXF export
+with #57; the maps are a later task (#58) and their menu entries are still disabled.
 
 ## Decisions
 
@@ -427,11 +427,11 @@ the maps are later tasks (#57, #58) and their menu entries are still disabled.
 | `src/bibliothek.rs` | the library panel on the shared `Verzeichnis` |
 | `src/panele.rs` | object browser (tabs Teile, Nähte, Stoffe), properties of a piece or seam, status bar |
 | `src/dialoge.rs` | floating windows: file dialog, error, help (shortcuts, about), Informationen, Netzprüfung (#46), drop hint |
-| `src/muster.rs` | (6c) also each piece's grainline (`Teil::fadenlauf`, `fadenlauf_fehler`) and the seam suggestion `naehte_vorschlagen` (seam list text, numbers of `klon3d naehte --vorschlag`); loading without UI: `.sm2d` → `Auswertung` → piece outlines (`ev.stueck_umriss`), circumference (`ev.umriss_laenge`), boundary edges (`ev.teilrand(stueck, Kurvenquelle::Seamly)`), seam report (`naehte::lies_nahtliste` + `pruefe_naehte`, the same numbers as `klon3d naehte`); measurement file as the pattern names it (see `klon3d-view/src/main.rs`, `Blatt::laden`) or chosen by hand |
+| `src/muster.rs` | (6c) also each piece's grainline (`Teil::fadenlauf`, `fadenlauf_fehler`) and the seam suggestion `naehte_vorschlagen` (seam list text, numbers of `klon3d naehte --vorschlag`); (6f) `dxf_ausgabe` (bytes through `Muster::dxf_teile` + `klon3d_pipeline::dxf::schreibe`, the same preparation the command line uses) and `obj_aus_muster` (the flat mesh as `klon3d netz --obj` writes it, one comment line more); loading without UI: `.sm2d` → `Auswertung` → piece outlines (`ev.stueck_umriss`), circumference (`ev.umriss_laenge`), boundary edges (`ev.teilrand(stueck, Kurvenquelle::Seamly)`), seam report (`naehte::lies_nahtliste` + `pruefe_naehte`, the same numbers as `klon3d naehte`); measurement file as the pattern names it (see `klon3d-view/src/main.rs`, `Blatt::laden`) or chosen by hand |
 | `src/ansicht2d.rs` | 2D view: pieces laid out side by side (as `klon3d-view` `auslegen`), pan, zoom around the cursor, fit, hit test, selection highlight, seams, edge lengths, scale bar; (6c) grainlines with arrow heads (`pfeilspitzen`) and notch ticks (`passzeichen`) |
 | `src/ansicht3d.rs` | (#56) 3D view: `Ansicht3d` (orbit camera, five `Blickwinkel`, fit, wireframe switch), the vertex data built from a `Bau` + snapshot by hand, two `egui_wgpu` pipelines (triangles, edges) and the WGSL shader as a `const`; without a target format only the hint text |
 | `src/simulation.rs` | (#56) the solver in its own thread: `Vorgaben` (pattern, measurement file, material, optional body) with `hindernis`, the unrolled construction from `klon3d-mcp`, `Befehl`/`Meldung` channels, `Schnappschuss` and `Bau` for the view |
-| `src/dateiwahl.rs` | folder listing `Verzeichnis` (shared with the library) and the modal file dialog; (6c) save mode (`Zweck::NahtlisteSpeichern`: file name field, question before overwriting) |
+| `src/dateiwahl.rs` | folder listing `Verzeichnis` (shared with the library) and the modal file dialog; (6c) save mode (`Zweck::NahtlisteSpeichern`: file name field, question before overwriting); (6f) the same for `Zweck::ObjSpeichern` and `Zweck::DxfSpeichern` |
 | `tests/gemeinsam/mod.rs` | helpers of the UI tests: windows, independent Bluse3 evaluation, grid rows, menus, storage |
 | `tests/oberflaeche.rs` | kittest: pieces and seams against `pruefe_naehte`, selection, theme, menus and their disabled entries, shortcuts, file dialog, drag and drop, measurement file choice, minimum size, all test patterns |
 | `tests/fensteranordnung.rs` | kittest: toolbars, Fenster toggles, Strg+Tab, Umschalt+S/Z, edge lengths, recent files, library, fabrics, Informationen, seam properties, old stored state, reset; (review 7b) double click on a folder, names vs lengths, names in the default arrangement, seam grid inside the object browser, help windows centred, recent files through `..` |
@@ -439,12 +439,12 @@ the maps are later tasks (#57, #58) and their menu entries are still disabled.
 | `tests/netzpruefung.rs` | kittest (#46): Netzprüfung disabled without a pattern (hover text), the report of the Bluse3 v2 with the numbers of an independent `vernetze` + `pruefe` (totals and one row per piece), closing by button, Esc and loading another pattern |
 | `tests/simulation.rs` | (#56) the solver from the window without one: `hindernis` names the missing file, start with short `Anziehen` values, at least two frames with moved points, hold (frame number stays), one single step adds exactly one frame, reset gives the start positions back bit for bit; after two frames the positions equal a run of `klon3d_pipeline::ablauf` made directly (1e-9, release), and twenty drawn frames while the solver works stay under 50 ms (release) |
 | `tests/ansicht3d.rs` | (#56) the camera without a GPU: five distinct `Blickwinkel`, `kamera_text`, `ist_blickwinkel`, and `Ansicht3d::ui` with `format: None` showing the hint and the canvas role "3D-Ansicht" |
+| `tests/export.rs` | kittest (6f): Export entries disabled without a pattern (hover text), DXF bytes equal to `Muster::dxf_teile` + `dxf::schreibe` (what `klon3d dxf` calls) with the piece count in the status bar, OBJ without a simulation with as many `v` lines as the pattern mesh and "ohne Simulation" in the file, OBJ after a short run with as many `v` lines and groups as the placed scene (release, skipped without CLO's body folder), the overwrite question for both (Nein keeps the dialog and the file, Überschreiben writes), the dialog starting in the pattern's folder |
 | `examples/bildschirmfoto.rs` | renders the window with kittest's wgpu renderer to PNG, no window and no focus taken (`--muster`, `--aus`, `--breite`, `--hoehe`, `--massstab`, `--dunkel`/`--hell`; #56 `--simulieren <bilder>` runs the solver and shows the 3D view). kittest prefers a software adapter, so the status bar shows e.g. "Microsoft Basic Render Driver" – not the GPU the app uses |
 
 Menu bar (step 7b; `[s]` = disabled, a later task): **Datei** (Neu Strg+N [s], Öffnen… Strg+O,
 Zuletzt geöffnet ›, Hinzufügen › Maßdatei… / Nahtliste…, Speichern Strg+S [s], Speichern unter…
-Strg+Umschalt+S [s], Import › Seamly2D-Muster (.sm2d)… / CLO-Projekt (.zprj)… [s], Export › OBJ… [s] /
-DXF… [s], Informationen…, Beenden Strg+Q) · **Bearbeiten** (Rückgängig Strg+Z [s], Wiederholen
+Strg+Umschalt+S [s], Import › Seamly2D-Muster (.sm2d)… / CLO-Projekt (.zprj)… [s], Export › OBJ… / DXF… (6f), Informationen…, Beenden Strg+Q) · **Bearbeiten** (Rückgängig Strg+Z [s], Wiederholen
 Strg+Y [s], Alles auswählen Strg+A [s], Auswahl aufheben Esc) · **3D-Kleidung** (Simulation
 starten/anhalten, Einzelschritt, Zurücksetzen (#56: the first two free when nothing is missing, the
 third needs a run), Anordnen [s], Netzauflösung… [s]; Netzprüfung (#46)) ·

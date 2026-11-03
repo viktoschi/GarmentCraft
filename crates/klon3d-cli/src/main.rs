@@ -31,7 +31,6 @@
 //! [`klon3d_koerper::koerper`]) und schreibt die Gruppe `body` in mm.
 
 mod anziehen;
-mod dxf;
 
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
@@ -39,6 +38,7 @@ use std::process::ExitCode;
 
 use klon3d_pattern::geom::{lies_messungen, Auswertung};
 use klon3d_pattern::{read_path, Pattern};
+use klon3d_pipeline::dxf;
 
 fn main() -> ExitCode {
     let args: Vec<String> = std::env::args().skip(1).collect();
@@ -1454,102 +1454,70 @@ fn befehl_dxf(args: &[String]) -> ExitCode {
         return ExitCode::FAILURE;
     };
 
-    let Some((muster, mess)) = laden(ein) else {
-        return ExitCode::FAILURE;
-    };
-    let f = match muster.unit_to_mm() {
-        Ok(f) => f,
+    let m = match klon3d_pipeline::Muster::laden(ein, None) {
+        Ok(m) => m,
         Err(e) => {
-            eprintln!("{}: {e}", ein.display());
+            eprintln!("{e}");
             return ExitCode::FAILURE;
         }
     };
-    let ev = Auswertung::new(&muster, mess);
-    let index = ev.modeling_index();
 
     // `--teile`: der Name beginnt mit einem der Muster; Groß/Klein egal,
     // Leerzeichen und `_` gleich — so passen auch Seamlys Blocknamen.
-    let gewaehlt = |name: &str| {
+    let gewaehlt = |t: &klon3d_pattern::Piece| {
+        let name = t.name.clone().unwrap_or_default();
         auswahl.as_ref().map_or(true, |a| {
-            let n = dxf::blockname(name);
+            let n = dxf::blockname(&name);
             a.iter().any(|m| n.starts_with(&dxf::blockname(m)))
         })
     };
 
+    let vorbereitet = match m.dxf_teile(gewaehlt) {
+        Ok(v) => v,
+        Err(e) => {
+            eprintln!("{e}");
+            return ExitCode::FAILURE;
+        }
+    };
+
     println!("{}", ein.display());
-    let mut teile = Vec::new();
     let mut warnungen = 0usize;
-    for t in muster.pieces() {
-        let name = t.name.clone().unwrap_or_default();
-        if !gewaehlt(&name) {
+    let mut teile = Vec::new();
+    for d in vorbereitet {
+        warnungen += d.warnungen();
+        if d.uebergangen {
+            println!(
+                "  {:<44} uebergangen: {} Punkte, {} Knoten offen",
+                anzeige_name(&d.teil.name),
+                d.teil.kante.len(),
+                d.offene.len()
+            );
             continue;
         }
-        // Lage wie in Seamlys Teilemodus (und in dessen DXF): Konstruktion
-        // plus Verschiebung des Teils. DXF zählt y nach oben, die .sm2d nach
-        // unten.
-        let mx = t.mx.as_deref().and_then(|s| s.trim().parse::<f64>().ok()).unwrap_or(0.0);
-        let my = t.my.as_deref().and_then(|s| s.trim().parse::<f64>().ok()).unwrap_or(0.0);
-        let nach_dxf = |p: klon3d_pattern::Pt| [(p.x + mx) * f, -(p.y + my) * f];
-
-        let (knoten, meldung) = ev.stueck_knoten(t);
-        let kante = dxf::bereinige(ev.umriss_aus_knoten(&knoten).into_iter().map(nach_dxf));
-        if kante.len() < 3 {
-            println!("  {:<44} uebergangen: {} Punkte, {} Knoten offen", anzeige(t), kante.len(), meldung.len());
-            warnungen += 1;
-            continue;
-        }
-
-        // Passzeichen: Punktknoten mit notch="true". Sie sind Ecken des
-        // Umrisses, liegen also auf der Kante.
-        let mut kerben = Vec::new();
-        let mut daneben = Vec::new();
-        for k in t.nodes.iter().flat_map(|n| &n.items) {
-            let ja = |w: &Option<String>| matches!(w.as_deref(), Some("true") | Some("1"));
-            if !ja(&k.notch) || ja(&k.exclude) || k.kind != "NodePoint" {
-                continue;
-            }
-            let p = match index.get(&k.id_object) {
-                Some((true, ziel)) => ev.punkt(ziel).map_err(|e| e.to_string()),
-                _ => Err("ohne Modellierziel".into()),
-            };
-            match p.map(nach_dxf) {
-                Ok(p) => match dxf::kerbe(&kante, p, 0.01) {
-                    Some(l) => kerben.push(l),
-                    None => daneben.push(format!("Knoten {} liegt nicht auf der Kante", k.id_object)),
-                },
-                Err(e) => daneben.push(format!("Knoten {}: {e}", k.id_object)),
-            }
-        }
-
-        let h = dxf::huelle(&kante);
+        let h = dxf::huelle(&d.teil.kante);
         println!(
             "  {:<44} {:>4} Pkt {:>8.1} mm Naht {:>7.1} x {:>7.1} mm {:>3} Passzeichen{}",
-            anzeige(t),
-            kante.len(),
-            dxf::ring_laenge(&kante),
+            anzeige_name(&d.teil.name),
+            d.teil.kante.len(),
+            dxf::ring_laenge(&d.teil.kante),
             h[2] - h[0],
             h[3] - h[1],
-            kerben.len(),
-            if meldung.is_empty() { String::new() } else { format!("  ({} Knoten offen)", meldung.len()) }
+            d.teil.kerben.len(),
+            if d.offene.is_empty() {
+                String::new()
+            } else {
+                format!("  ({} Knoten offen)", d.offene.len())
+            }
         );
-        for d in &daneben {
-            println!("      Passzeichen fehlt: {d}");
+        for text in &d.daneben {
+            println!("      Passzeichen fehlt: {text}");
         }
-        warnungen += daneben.len() + meldung.len();
-        teile.push(dxf::Teil { name, kante, kerben });
+        teile.push(d.teil);
     }
 
     if teile.is_empty() {
         eprintln!("kein Teil zu schreiben");
         return ExitCode::FAILURE;
-    }
-
-    // Die ganze Anordnung an den Ursprung.
-    let h = dxf::huelle(&teile.iter().flat_map(|t| t.kante.iter().copied()).collect::<Vec<_>>());
-    for t in &mut teile {
-        for p in t.kante.iter_mut().chain(t.kerben.iter_mut().flatten()) {
-            *p = [p[0] - h[0], p[1] - h[1]];
-        }
     }
 
     if let Err(e) = std::fs::write(aus, dxf::schreibe(&teile)) {
@@ -1565,7 +1533,16 @@ fn befehl_dxf(args: &[String]) -> ExitCode {
 }
 
 fn anzeige(t: &klon3d_pattern::Piece) -> String {
-    let n = t.name.clone().unwrap_or_else(|| "<ohne Namen>".into());
+    anzeige_name(&t.name.clone().unwrap_or_else(|| "<ohne Namen>".into()))
+}
+
+/// How `klon3d dxf` prints a piece name: at most 43 characters, shortened from the front.
+fn anzeige_name(name: &str) -> String {
+    let n = if name.is_empty() {
+        "<ohne Namen>".to_string()
+    } else {
+        name.to_string()
+    };
     if n.chars().count() > 43 {
         format!("…{}", n.chars().skip(n.chars().count() - 42).collect::<String>())
     } else {

@@ -67,6 +67,28 @@ fn eintrag_fuer_ziel(ui: &mut egui::Ui, app: &mut App, text: &str, aktion: Aktio
     }
 }
 
+/// A menu entry for the OBJ export: needs a pattern, because without a simulation the flat mesh of
+/// the pattern is written. The hover text says which of the two it will be.
+fn eintrag_fuer_obj(ui: &mut egui::Ui, app: &mut App) {
+    let da = app.muster.is_some();
+    let r = ui
+        .add_enabled(da, knopf("OBJ…", ""))
+        .on_disabled_hover_text(ERST_MUSTER);
+    let r = if da {
+        let text = if app.simulation.bereit() {
+            "Szene der Simulation, Einheit mm"
+        } else {
+            "ohne Simulation: das flache Musternetz, Einheit mm"
+        };
+        r.on_hover_text(text)
+    } else {
+        r
+    };
+    if r.clicked() {
+        app.aktion(Aktion::ObjExportieren);
+    }
+}
+
 /// A menu entry that runs the simulation: enabled when nothing is missing; the hover text then
 /// names the file that is (`simulation::hindernis`).
 fn eintrag_fuer_simulation(
@@ -240,8 +262,8 @@ fn datei(app: &mut App, ui: &mut egui::Ui) {
         spaeter(ui, "CLO-Projekt (.zprj)…", "");
     });
     ui.menu_button("Export", |ui| {
-        spaeter(ui, "OBJ…", "");
-        spaeter(ui, "DXF…", "");
+        eintrag_fuer_obj(ui, app);
+        eintrag_mit_muster(ui, app, "DXF…", "", Aktion::DxfExportieren);
     });
     ui.separator();
     eintrag_mit_muster(ui, app, "Informationen…", "", Aktion::InformationenZeigen);

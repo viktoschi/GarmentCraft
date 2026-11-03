@@ -34,6 +34,10 @@ pub enum Zweck {
     Stoff,
     /// A CLO project (`.zprj`) that brings its own body.
     KoerperProjekt,
+    /// The simulation as Wavefront OBJ.
+    ObjSpeichern,
+    /// The pattern's seam lines as AAMA DXF for CLO.
+    DxfSpeichern,
 }
 
 impl Zweck {
@@ -45,6 +49,8 @@ impl Zweck {
             Zweck::Nahtliste | Zweck::NahtlisteSpeichern => &["naehte"],
             Zweck::Stoff => &["zfab"],
             Zweck::KoerperProjekt => &["zprj"],
+            Zweck::ObjSpeichern => &["obj"],
+            Zweck::DxfSpeichern => &["dxf"],
         }
     }
 
@@ -57,13 +63,18 @@ impl Zweck {
             Zweck::NahtlisteSpeichern => "Nahtliste speichern",
             Zweck::Stoff => "Stoff wählen",
             Zweck::KoerperProjekt => "Körper laden",
+            Zweck::ObjSpeichern => "OBJ speichern",
+            Zweck::DxfSpeichern => "DXF speichern",
         }
     }
 
     /// Does the dialog write a file (name field, question before overwriting) instead of
     /// choosing an existing one?
     pub fn speichern(self) -> bool {
-        matches!(self, Zweck::NahtlisteSpeichern)
+        matches!(
+            self,
+            Zweck::NahtlisteSpeichern | Zweck::ObjSpeichern | Zweck::DxfSpeichern
+        )
     }
 }
 
@@ -678,7 +689,7 @@ impl Dateiwahl {
                     // Not just "Öffnen" / "Speichern": the toolbar has buttons of those names.
                     let titel = match self.zweck {
                         Zweck::Muster => "Datei öffnen",
-                        Zweck::NahtlisteSpeichern => "Datei speichern",
+                        _ if speichern => "Datei speichern",
                         _ => "Datei wählen",
                     };
                     if ui.button(titel).clicked() {
@@ -714,6 +725,8 @@ mod tests {
         let d = ordner("speichern");
         let mut w = Dateiwahl::zum_speichern(Zweck::NahtlisteSpeichern, &d, "");
         assert!(w.zweck.speichern() && !Zweck::Nahtliste.speichern());
+        assert!(Zweck::ObjSpeichern.speichern() && Zweck::DxfSpeichern.speichern());
+        assert!(!Zweck::Muster.speichern() && !Zweck::Stoff.speichern());
         assert_eq!(w.speichern_bestaetigen(), None);
         assert!(w.liste.fehler.is_some(), "kein Name");
         // A new name without an extension gets the purpose's one.

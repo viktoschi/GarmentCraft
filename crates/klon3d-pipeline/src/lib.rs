@@ -29,6 +29,7 @@
 //! so a caller can pause or stop between two frames.
 
 pub mod ablauf;
+pub mod dxf;
 pub mod stoff;
 
 use std::collections::HashMap;
@@ -166,6 +167,129 @@ impl Muster {
             .map_err(|e| Fehler::Naehte(e.to_string()))?;
         klon3d_mesh::vernetze(&ev, Kurvenquelle::Seamly, &bericht.naehte, p)
             .map_err(|e| Fehler::Netz(e.to_string()))
+    }
+
+    /// The pieces as the DXF export writes them: outline in DXF coordinates (mm, y upwards),
+    /// notch marks, the whole arrangement moved to the origin. The single place where
+    /// `klon3d dxf` and the application window prepare the file, so both write the same bytes.
+    ///
+    /// `waehlen` picks the pieces (`--teile`); it runs before the arrangement is moved, so the
+    /// result is the same as selecting the pieces first.
+    pub fn dxf_teile(
+        &self,
+        waehlen: impl Fn(&klon3d_pattern::Piece) -> bool,
+    ) -> Result<Vec<Dxfteil>, Fehler> {
+        let f = self
+            .muster
+            .unit_to_mm()
+            .map_err(|e| Fehler::Muster(format!("{}: {e}", self.pfad.display())))?;
+        let ev = self.auswertung();
+        let index = ev.modeling_index();
+
+        let mut out = Vec::new();
+        for t in self.muster.pieces() {
+            let name = t.name.clone().unwrap_or_default();
+            if !waehlen(t) {
+                continue;
+            }
+            // As in Seamly's piece mode (and in its DXF): construction plus the piece's offset.
+            // DXF counts y upwards, the .sm2d downwards.
+            let mx = t
+                .mx
+                .as_deref()
+                .and_then(|s| s.trim().parse::<f64>().ok())
+                .unwrap_or(0.0);
+            let my = t
+                .my
+                .as_deref()
+                .and_then(|s| s.trim().parse::<f64>().ok())
+                .unwrap_or(0.0);
+            let nach_dxf = |p: klon3d_pattern::Pt| [(p.x + mx) * f, -(p.y + my) * f];
+
+            let (knoten, offene) = ev.stueck_knoten(t);
+            let kante = dxf::bereinige(ev.umriss_aus_knoten(&knoten).into_iter().map(nach_dxf));
+            if kante.len() < 3 {
+                out.push(Dxfteil {
+                    teil: dxf::Teil {
+                        name,
+                        kante,
+                        kerben: Vec::new(),
+                    },
+                    uebergangen: true,
+                    offene,
+                    daneben: Vec::new(),
+                });
+                continue;
+            }
+
+            // Notch marks: point nodes with notch="true". They are corners of the outline and
+            // so lie on the edge.
+            let mut kerben = Vec::new();
+            let mut daneben = Vec::new();
+            for k in t.nodes.iter().flat_map(|n| &n.items) {
+                let ja = |w: &Option<String>| matches!(w.as_deref(), Some("true") | Some("1"));
+                if !ja(&k.notch) || ja(&k.exclude) || k.kind != "NodePoint" {
+                    continue;
+                }
+                let p = match index.get(&k.id_object) {
+                    Some((true, ziel)) => ev.punkt(ziel).map_err(|e| e.to_string()),
+                    _ => Err("ohne Modellierziel".into()),
+                };
+                match p.map(nach_dxf) {
+                    Ok(p) => match dxf::kerbe(&kante, p, 0.01) {
+                        Some(l) => kerben.push(l),
+                        None => daneben.push(format!(
+                            "Knoten {} liegt nicht auf der Kante",
+                            k.id_object
+                        )),
+                    },
+                    Err(e) => daneben.push(format!("Knoten {}: {e}", k.id_object)),
+                }
+            }
+            out.push(Dxfteil {
+                teil: dxf::Teil { name, kante, kerben },
+                uebergangen: false,
+                offene,
+                daneben,
+            });
+        }
+
+        // The whole arrangement to the origin.
+        let alle: Vec<dxf::P> = out
+            .iter()
+            .filter(|t| !t.uebergangen)
+            .flat_map(|t| t.teil.kante.iter().copied())
+            .collect();
+        let h = dxf::huelle(&alle);
+        for t in out.iter_mut().filter(|t| !t.uebergangen) {
+            for p in t.teil.kante.iter_mut().chain(t.teil.kerben.iter_mut().flatten()) {
+                *p = [p[0] - h[0], p[1] - h[1]];
+            }
+        }
+        Ok(out)
+    }
+}
+
+/// One piece as the DXF export prepared it, with the notes the command line prints.
+#[derive(Debug, Clone)]
+pub struct Dxfteil {
+    pub teil: dxf::Teil,
+    /// Left out: fewer than three points in the outline.
+    pub uebergangen: bool,
+    /// Nodes whose target did not resolve.
+    pub offene: Vec<String>,
+    /// Notch marks that did not lie on the outline.
+    pub daneben: Vec<String>,
+}
+
+impl Dxfteil {
+    /// Warnings of this piece, as `klon3d dxf` counts them.
+    pub fn warnungen(&self) -> usize {
+        if self.uebergangen {
+            1
+        } else {
+            self.daneben.len() + self.offene.len()
+        }
     }
 }
 

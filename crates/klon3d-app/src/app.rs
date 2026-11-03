@@ -51,8 +51,9 @@ use crate::ansicht3d::{Ansicht3d, Blickwinkel};
 use crate::bibliothek::Bibliothek;
 use crate::dateiwahl::{auflisten, passt, Dateiwahl, Zweck};
 use crate::muster::{
-    dateiname, delta4, naehte_vorschlagen, nahtliste_neben, netz_pruefen, Ladeauftrag, Ladefehler,
-    Muster, Nahtstand, Nahtvorschlag, Netzauftrag, Netzpruefung,
+    dateiname, delta4, dxf_ausgabe, naehte_vorschlagen, nahtliste_neben, netz_pruefen,
+    obj_aus_muster, Ladeauftrag, Ladefehler, Muster, Nahtstand, Nahtvorschlag, Netzauftrag,
+    Netzpruefung,
 };
 use crate::panele::Reiter;
 use crate::simulation::{hindernis, Anziehen, Befehl, Koerperdatei, Simulation, Vorgaben};
@@ -140,6 +141,10 @@ pub enum Aktion {
     StoffWaehlen,
     /// Choose a body file (`.zprj`) for the simulation.
     KoerperWaehlen,
+    /// Write the simulation's scene as OBJ – or, without a simulation, the pattern's flat mesh.
+    ObjExportieren,
+    /// Write the pattern's seam lines as AAMA DXF for CLO.
+    DxfExportieren,
 }
 
 /// The help window shown, if any.
@@ -709,6 +714,8 @@ impl App {
                     .unwrap_or_else(|| self.letzter_ordner.clone());
                 self.dateiwahl = Some(Dateiwahl::neu(Zweck::KoerperProjekt, &ordner));
             }
+            Aktion::ObjExportieren => self.exportieren(Zweck::ObjSpeichern),
+            Aktion::DxfExportieren => self.exportieren(Zweck::DxfSpeichern),
         }
         ctx.request_repaint();
     }
@@ -792,6 +799,113 @@ impl App {
                 self.melden(format!("Körper: {}", pfad.display()), false);
                 self.simulation.beenden();
             }
+            Zweck::ObjSpeichern => self.obj_schreiben(&pfad),
+            Zweck::DxfSpeichern => self.dxf_schreiben(&pfad),
+        }
+    }
+
+    /// "Export › OBJ…": open the save dialog at `<pattern>.obj` in the pattern's folder.
+    fn exportieren(&mut self, zweck: Zweck) {
+        let Some(m) = &self.muster else {
+            self.melden("Erst ein Muster öffnen", true);
+            return;
+        };
+        let endung = if zweck == Zweck::DxfSpeichern { "dxf" } else { "obj" };
+        let stem = m
+            .pfad
+            .file_stem()
+            .map(|s| s.to_string_lossy().into_owned())
+            .unwrap_or_else(|| "export".into());
+        let ordner = m
+            .pfad
+            .parent()
+            .map(Path::to_path_buf)
+            .unwrap_or_else(|| self.letzter_ordner.clone());
+        self.dateiwahl = Some(Dateiwahl::zum_speichern(
+            zweck,
+            &ordner,
+            &format!("{stem}.{endung}"),
+        ));
+    }
+
+    /// Write the simulation's scene as OBJ – or, without a simulation, the pattern's flat mesh –
+    /// to `pfad`.
+    fn obj_schreiben(&mut self, pfad: &Path) {
+        if self.simulation.bereit() {
+            let (Some(bau), Some(bild)) = (self.simulation.bau(), self.simulation.bild()) else {
+                self.fehler("Keine Szene zum Ausgeben – Simulation unvollständig");
+                return;
+            };
+            let text = klon3d_sim::ausgabe::obj_aus(
+                &bild.x,
+                &bau.stoff_dreiecke,
+                bau.teile
+                    .iter()
+                    .map(|t| (t.name.as_str(), t.dreiecke.clone())),
+            );
+            let punkte = bild.x.len();
+            if let Err(e) = std::fs::write(pfad, &text) {
+                self.fehler(format!("{}: {e}", pfad.display()));
+                return;
+            }
+            self.melden(
+                format!(
+                    "OBJ der Szene gespeichert: {} ({} Punkte, {} Teile)",
+                    pfad.display(),
+                    punkte,
+                    bau.teile.len()
+                ),
+                false,
+            );
+            return;
+        }
+        let Some(m) = &self.muster else {
+            self.melden("Erst ein Muster öffnen", true);
+            return;
+        };
+        let auftrag = Netzauftrag::zu(m);
+        match obj_aus_muster(&auftrag) {
+            Ok((text, punkte)) => match std::fs::write(pfad, &text) {
+                Ok(()) => self.melden(
+                    format!(
+                        "OBJ des Musternetzes gespeichert: {} ({punkte} Punkte, ohne Simulation)",
+                        pfad.display()
+                    ),
+                    false,
+                ),
+                Err(e) => self.fehler(format!("{}: {e}", pfad.display())),
+            },
+            Err(e) => self.fehler(e),
+        }
+    }
+
+    /// Write the pattern's seam lines as AAMA DXF to `pfad` – byte for byte what `klon3d dxf`
+    /// writes for the same files.
+    fn dxf_schreiben(&mut self, pfad: &Path) {
+        let Some(m) = &self.muster else {
+            self.melden("Erst ein Muster öffnen", true);
+            return;
+        };
+        match dxf_ausgabe(&m.pfad, &m.massdatei) {
+            Ok(a) => match std::fs::write(pfad, &a.bytes) {
+                Ok(()) => {
+                    let zusatz = if a.hinweise.is_empty() {
+                        String::new()
+                    } else {
+                        format!(", {} Hinweise", a.hinweise.len())
+                    };
+                    self.melden(
+                        format!(
+                            "DXF gespeichert: {} ({} Teile{zusatz})",
+                            pfad.display(),
+                            a.teile
+                        ),
+                        false,
+                    );
+                }
+                Err(e) => self.fehler(format!("{}: {e}", pfad.display())),
+            },
+            Err(e) => self.fehler(e),
         }
     }
 
