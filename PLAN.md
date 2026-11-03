@@ -128,6 +128,7 @@ empty `<measurements/>` no longer takes the next text of the file as its path.
 | Circumference measurement | section loop that encloses the body axis, gaps ≤ 2 cm closed like a seam | **done for the torso** (findings 22, 25) |
 | Tape measure | convex hull of the section as in CLO (`massband.rs`), candidate selection for the five torso measurements, sampling | **done**: 21 of 22 reference values on the BaseMesh < 0.00001 cm, same candidates (finding 30) |
 | Body base | CLO's `BaseMesh.obj`, 47,650 vertices (40,465 of them used by a face), 164.15 cm tall in the `body` group; the highest unused vertex reaches 166.60 cm | **available** |
+| Body base without CLO | MakeHuman `hm08` (`data/3dobjs/base.obj`, 19,158 vertices, group `body` 13,380) shaped with MakeHuman's own **CC0** targets, then scaled to the file's height. Checked 2026-11-03 (finding 123): female target + `maxcup` cup target puts the bust at 98.1 cm against 92.67 (+5.4) where the unshaped mesh was -23.7, and the side of the breast stands 4.85 cm in front of the midline (0.28 without). No target reaches her hip (+13.3) or high hip (-5.7), and the apex-to-apex distance comes out 13.74 against her 22 | **ground body and breast depth available**, apex width and hip left to the Newton fit |
 | Shaping (5.2 backup) | `P = base mesh + F_last + Σ F_k · c_k` from the `.bd` fields | **built in**, 5 torso measurements + 8 height fields (finding 24) |
 | 58 measurements (5.2 set) | the 5.2 measuring methods (`messung.rs`) | **done**: 57 of 58 on the BaseMesh ≤ 5·10⁻⁷ cm, Wrist +0.035 mm (finding 31); the reference set of 67 (`messung_referenz.rs`) is the row below |
 | 67 measurements (reference set) | `messung_referenz.rs`: the measurement set of the reference folder, cut in `f32` (`massband::kantenschnitt_f32`, `normale_f32`) | **done**: 0.00020 / 0.00033 / 0.00014 mm on the three reference meshes (`messung_referenz_clo.rs`) |
@@ -192,6 +193,87 @@ On the current body the torso section at 73 cm is closed and the crotch lies at
 of the OBJ (teeth, lashes, eyes); the body itself is closed (finding 60).
 `rumpf()` still closes gaps up to 2 cm, which makes measuring possible at every
 torso height (finding 22).
+
+### Body without CLO data (finding 123, 2026-11-03)
+
+Every body path above needs CLO: `BaseMesh.obj` for the net, `ConvertingMat_*.bd`
+or the reference folder for the shaping. Both are CLO's and cannot be shipped.
+The landmarks no longer do — since #56 `koerper::anordnung` finds them on any
+mesh (`anordnung_netz::aus_netz`, checked against CLO's own values to 2.27 cm,
+mean 0.99 cm). What is still missing is a **free body with a believable form**.
+
+The candidate is MakeHuman (CC0, so it can be shipped): `hm08`, 19,158 vertices,
+group `body` 13,380. Its targets are plain text, `<index> <dx> <dy> <dz>` in
+decimetres, indexed against that mesh — no matching needed. Measured on the
+body group, scaled to 160 cm (findings in the author's notes, section 4b/4c):
+
+| Line | `.smis` | plain `hm08` | + female | + female + `maxcup` |
+|---|---|---|---|---|
+| Neck 135 | 37.0 | 34.8 | 38.2 | 38.2 |
+| **Bust 111** | **92.67** | 68.9 (−23.7) | 69.3 (−23.3) | **98.1 (+5.4)** |
+| Waist 98 | 70.0 | 70.9 | 70.1 | 70.1 |
+| High hip 93 | 83.0 | 81.9 | 77.3 (−5.7) | 77.3 (−5.7) |
+| Hip 77 | 90.0 | 97.4 | 103.3 (+13.3) | 103.3 (+13.3) |
+
+The female target alone does **not** create a breast — it moves the whole body
+(19,150 vertices, median 5.16 cm) and makes hip and high hip worse. The volume
+comes from the cup target only: at y = 111 the side of the breast then stands
+4.85 cm in front of the midline, where the plain mesh has 0.28 cm. The largest
+cup overshoots her (bust − underbust 32.7 against her 16.7), so the targets
+give the **form**, not the size.
+
+No target fits her hips: `hip-scale-horiz-decr` pulls the high hip to 66.6,
+`hip-trans-in` the waist to 61.5, `minweight` the high hip to 72.7. That part
+must come from `anpassen.rs`, which is mesh-independent already (Newton on
+`Formung` + `Messlinien`). Of the chain, `anordnung_netz` and `anpassen` run on
+any mesh; `nachformung` needs a per-vertex segment (`Messdaten::aus_netz` puts
+every point in one segment); `formung::Formung::laden`, `kette_referenz`,
+`messung_referenz` and `anordnung_clo` are bound to CLO indices and do not.
+
+So the free body is **ground body + breast form for free, hips by Newton**.
+Not built yet — it is its own task (see #65).
+
+**What "shape the measures onto the body" has to mean.** Tight latex lies on
+every point, so circumferences alone are not enough. The reference body
+(`klon3d koerper`, 31,422 points, 160.66 cm) was measured on the **hull**
+(`messung_referenz::umfang`, i.e. the tape) at the heights the chain uses:
+
+- Circumferences are exact: 92.666 / 76.002 / 69.987 / 90.016 against
+  92.67 / 76.00 / 70.00 / 90.00 cm (≤ 0.02).
+- The bust line sits at **y = 113**, not at `height_bustpoint` 111 (hull 90.57
+  there, 92.73 at 113). Waist 98, high hip 93, hip 77 are fixed and hit.
+- The bust arcs are where the error is, and it is **one number**. The tape
+  definition (`bauen_2.5.py`, self-test in `bauen_3.2.js`) is
+  `2 · side piece + apex-to-apex = bust_arc_f`; her 56 and 22 give a side piece
+  of 17.00. Measured on the hull at y = 113, without choosing any side line:
+  front arc **47.95** (56), back arc **44.78** (37), apex-to-apex **13.74**
+  (22), side piece **17.10** (17.00). The side piece matches to 1 mm — the whole
+  arc error is the apex distance. The chest is narrow and high instead of wide
+  and flat, which no circumference fit can see.
+- **Cause:** `kette.rs:62` reads `bustpoint_to_bustpoint` (slot 44,
+  `LENGTH_APEX_APEX`), but `Konfiguration::klon3d()` never sets `codes[44]`, so
+  `zaehlt()` returns false for every step. Counter-test: the same `.smis` with
+  the value raised 22 → 30 yields a body that differs by **0.000000 mm** over
+  all 31,422 points. The value is carried, never formed.
+- The arcs are not read either: `SMIS` has no `bust_arc*`/`waist_arc*`/
+  `hip_arc*`, `messung_referenz` has no partial arcs, and `anpassen::Messort`
+  knows only the five circumferences. Her `.smis` has them and her blouse uses
+  `bust_arc_f` (`Bluse3_Prinzessnaht_parametrisch_v21.sm2d`, `#BustShapeF`).
+
+MakeHuman + `maxcup` is therefore the right **form donor for the breast depth**
+(5.91 cm against 0.85), but it brings the wrong apex width (side piece 12.39)
+and a hip 6.6 cm too wide. The Newton fit would have to take apex distance and
+partial arcs as targets of their own, and those measurements do not exist yet —
+that is the core of #65.
+
+The fit is not ready for that either: `anpassen` requires **as many targets as
+lines as active fields** (`anpassen.rs:432–438`), and `Messlinien::aktiv`
+(`:213`) maps each line to exactly one field (`CIRCUMFERENCE_Bust` …). Five
+lines, five fields, quadratic. Adding the apex distance makes the system
+overdetermined. It needs damped least squares on the Jacobian already computed
+(`a[i][j]`, `:477–485`), or real shape degrees of freedom (radial offset of the
+torso loop per height and angle, driven by the arc difference) — the latter is
+new modelling, and CLO's own field set has no columns for the arcs either.
 
 ## Stage 3 — Pattern to mesh
 
