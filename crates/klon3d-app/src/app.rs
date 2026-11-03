@@ -47,6 +47,7 @@ use crate::anordnung::{
     SCHLUESSEL_ANZEIGE2D, SCHLUESSEL_ZULETZT,
 };
 use crate::ansicht2d::Ansicht2d;
+use crate::ansicht3d::{Ansicht3d, Blickwinkel};
 use crate::bibliothek::Bibliothek;
 use crate::dateiwahl::{auflisten, passt, Dateiwahl, Zweck};
 use crate::muster::{
@@ -54,6 +55,7 @@ use crate::muster::{
     Muster, Nahtstand, Nahtvorschlag, Netzauftrag, Netzpruefung,
 };
 use crate::panele::Reiter;
+use crate::simulation::{hindernis, Anziehen, Befehl, Koerperdatei, Simulation, Vorgaben};
 
 /// Storage key of the theme (`"dunkel"` or `"hell"`).
 pub const SCHLUESSEL_THEMA: &str = "klon3d.thema";
@@ -122,6 +124,22 @@ pub enum Aktion {
     FehlerZeigen,
     TastenkuerzelZeigen,
     UeberZeigen,
+    /// Start the simulation, or hold a running one.
+    SimulationUmschalten,
+    /// Compute a single solver frame (`n` frames).
+    SimulationSchritt(usize),
+    /// Back to the frame as built.
+    SimulationZuruecksetzen,
+    /// Set one of the five standard views of the 3D camera.
+    BlickwinkelSetzen(Blickwinkel),
+    /// Put the whole body into the 3D view.
+    Einpassen3d,
+    /// Draw the cloth edges as a wireframe.
+    NetzUmschalten,
+    /// Choose a fabric file for the simulation.
+    StoffWaehlen,
+    /// Choose a body file (`.zprj`) for the simulation.
+    KoerperWaehlen,
 }
 
 /// The help window shown, if any.
@@ -184,6 +202,16 @@ pub struct App {
     pub anordnung: Anordnung,
     /// The 3D or the 2D window.
     pub aktiv: Fenster,
+    /// The 3D view: camera, wireframe, vertex data.
+    pub ansicht3d: Ansicht3d,
+    /// The simulation runner and what it reported.
+    pub simulation: Simulation,
+    /// The colour format of the window's target texture, read from the render state once.
+    pub gpu_format: Option<eframe::wgpu::TextureFormat>,
+    /// The fabric of the next simulation; `None` = the default one.
+    pub stoff: Option<klon3d_sim::Material>,
+    /// The body file chosen in Avatar › Körper laden…; `None` = the pattern's measurement file.
+    pub koerper: Option<Koerperdatei>,
     /// The fabrics folder (`assets/stoffe`), if one was found at start.
     pub stoffordner: Option<PathBuf>,
     /// File names of the fabrics (`.zfab`) in the fabrics folder, read at start.
@@ -262,6 +290,11 @@ impl App {
             datei_menue_offen: false,
             anordnung: Anordnung::aus_text(&lies(SCHLUESSEL_ANORDNUNG).unwrap_or_default()),
             aktiv: Fenster::Zwei,
+            ansicht3d: Ansicht3d::default(),
+            simulation: Simulation::neu(),
+            gpu_format: None,
+            stoff: None,
+            koerper: None,
             stoffordner,
             stoffe,
             beenden_angefordert: false,
@@ -316,6 +349,8 @@ impl App {
                 anordnung::zuletzt_vorne(&mut self.zuletzt, &auftrag.muster);
                 self.zuletzt_pruefung.setzen(&auftrag.muster, true);
                 self.titel = Some(format!("klon3d – {}", m.dateiname()));
+                // The simulation belongs to the pattern it was built for.
+                self.simulation.beenden();
                 self.muster = Some(m);
                 self.auftrag = Some(auftrag);
                 self.wartend = None;
@@ -379,6 +414,7 @@ impl App {
     /// [`App::ladeziel`]. Other files are refused with a message.
     pub fn dateien_ablegen(&mut self, pfade: Vec<PathBuf>) {
         let (mut muster, mut mass, mut naht, mut fremd) = (vec![], vec![], vec![], vec![]);
+        let (mut stoff, mut koerper) = (vec![], vec![]);
         for p in pfade {
             if passt(&p, Zweck::Muster.endungen()) {
                 muster.push(p);
@@ -386,9 +422,20 @@ impl App {
                 mass.push(p);
             } else if passt(&p, Zweck::Nahtliste.endungen()) {
                 naht.push(p);
+            } else if passt(&p, Zweck::Stoff.endungen()) {
+                stoff.push(p);
+            } else if passt(&p, Zweck::KoerperProjekt.endungen()) {
+                koerper.push(p);
             } else {
                 fremd.push(p);
             }
+        }
+        // A fabric or a body replaces the one chosen before: the last one wins.
+        if let Some(p) = stoff.pop() {
+            self.datei_annehmen(Zweck::Stoff, p);
+        }
+        if let Some(p) = koerper.pop() {
+            self.datei_annehmen(Zweck::KoerperProjekt, p);
         }
         let mehrfach: Vec<&str> = [
             (muster.len(), "Muster"),
@@ -637,19 +684,115 @@ impl App {
             Aktion::FehlerZeigen => {}
             Aktion::TastenkuerzelZeigen => self.hilfe = Some(Hilfe::Tastenkuerzel),
             Aktion::UeberZeigen => self.hilfe = Some(Hilfe::Ueber),
+            Aktion::SimulationUmschalten => self.simulation_umschalten(ctx),
+            Aktion::SimulationSchritt(n) => {
+                if self.simulation_starten(ctx) {
+                    self.simulation.befehl(Befehl::Schritte(n));
+                }
+            }
+            Aktion::SimulationZuruecksetzen => self.simulation.befehl(Befehl::Zuruecksetzen),
+            Aktion::BlickwinkelSetzen(b) => self.ansicht3d.blickwinkel(b),
+            Aktion::Einpassen3d => self.ansicht3d.einpassen_anfordern(),
+            Aktion::NetzUmschalten => self.ansicht3d.netz = !self.ansicht3d.netz,
+            Aktion::StoffWaehlen => {
+                let ordner = self
+                    .stoffordner
+                    .clone()
+                    .unwrap_or_else(|| self.letzter_ordner.clone());
+                self.dateiwahl = Some(Dateiwahl::neu(Zweck::Stoff, &ordner));
+            }
+            Aktion::KoerperWaehlen => {
+                let ordner = self
+                    .auftrag
+                    .as_ref()
+                    .and_then(|a| a.muster.parent().map(Path::to_path_buf))
+                    .unwrap_or_else(|| self.letzter_ordner.clone());
+                self.dateiwahl = Some(Dateiwahl::neu(Zweck::KoerperProjekt, &ordner));
+            }
         }
         ctx.request_repaint();
+    }
+
+    /// What the simulation is built from: the pattern shown, its measurement file and seam list,
+    /// the placement list next to it, the body and the fabric chosen.
+    pub fn vorgaben(&self) -> Result<Vorgaben, String> {
+        let Some(m) = &self.muster else {
+            return Err("Erst ein Muster öffnen".into());
+        };
+        let material = self.stoff.unwrap_or(klon3d_sim::RADICAL_RUBBER_04);
+        let v = Vorgaben::aus(
+            &m.pfad,
+            &m.massdatei,
+            material,
+            self.koerper
+                .clone()
+                .or(Some(Koerperdatei::Massdatei(m.massdatei.clone()))),
+        );
+        match hindernis(&v) {
+            Some(h) => Err(h),
+            None => Ok(v),
+        }
+    }
+
+    /// Start the simulation for the pattern shown unless the same one is running already.
+    /// Returns whether a simulation is running afterwards.
+    pub fn simulation_starten(&mut self, ctx: &egui::Context) -> bool {
+        if self.simulation.eingeschaltet() {
+            return true;
+        }
+        let v = match self.vorgaben() {
+            Ok(v) => v,
+            Err(e) => {
+                self.melden(e, true);
+                return false;
+            }
+        };
+        self.simulation.starten(v, Anziehen::default(), ctx);
+        true
+    }
+
+    /// Simulation › starten/anhalten: holds a running one, starts or continues a stopped one.
+    fn simulation_umschalten(&mut self, ctx: &egui::Context) {
+        if !self.simulation_starten(ctx) {
+            return;
+        }
+        if self.simulation.laeuft() {
+            self.simulation.befehl(Befehl::Anhalten);
+        } else {
+            self.simulation.befehl(Befehl::Laufen);
+        }
     }
 
     /// A file chosen in the dialog. Its purpose comes from the dialog, not from the file name:
     /// with "alle Dateien" any file can be chosen.
     pub(crate) fn datei_annehmen(&mut self, zweck: Zweck, pfad: PathBuf) {
         match zweck {
-            Zweck::Muster => self.mit_dateien(Some(pfad), None, None),
-            Zweck::Massdatei => self.mit_dateien(None, Some(pfad), None),
-            Zweck::Nahtliste => self.mit_dateien(None, None, Some(pfad)),
-            Zweck::NahtlisteSpeichern => self.vorschlag_speichern(&pfad),
-        };
+            Zweck::Muster => {
+                self.mit_dateien(Some(pfad), None, None);
+            }
+            Zweck::Massdatei => {
+                self.mit_dateien(None, Some(pfad), None);
+            }
+            Zweck::Nahtliste => {
+                self.mit_dateien(None, None, Some(pfad));
+            }
+            Zweck::NahtlisteSpeichern => {
+                self.vorschlag_speichern(&pfad);
+            }
+            Zweck::Stoff => match klon3d_pipeline::stoff::stoff_laden(&pfad) {
+                Ok(m) => {
+                    self.melden(format!("Stoff: {}", m.name), false);
+                    self.stoff = Some(m);
+                    self.simulation.beenden();
+                }
+                Err(e) => self.fehler(format!("{}: {e}", pfad.display())),
+            },
+            Zweck::KoerperProjekt => {
+                self.koerper = Some(Koerperdatei::Projekt(pfad.clone()));
+                self.melden(format!("Körper: {}", pfad.display()), false);
+                self.simulation.beenden();
+            }
+        }
     }
 
     /// "Nähte vorschlagen…": suggest the seams of the pattern shown and open the save dialog at
@@ -739,7 +882,7 @@ impl App {
         if self.dateiwahl.is_some() || ctx.text_edit_focused() {
             return;
         }
-        let (strg_tab, f, l, zurueck, vor, naehte, laengen) = ctx.input_mut(|i| {
+        let (strg_tab, f, l, zurueck, vor, naehte, laengen, leertaste) = ctx.input_mut(|i| {
             (
                 // Ctrl must match exactly, so plain Tab below does not see Ctrl+Tab.
                 i.consume_key(Modifiers::COMMAND, Key::Tab),
@@ -750,8 +893,14 @@ impl App {
                 i.consume_key(Modifiers::NONE, Key::Tab),
                 i.consume_key(Modifiers::SHIFT, Key::S),
                 i.consume_key(Modifiers::SHIFT, Key::Z),
+                // CLO's shortcut for start/hold; consumed, so egui does not press a focused
+                // button with it as well.
+                i.consume_key(Modifiers::NONE, Key::Space),
             )
         });
+        if leertaste {
+            self.aktion(Aktion::SimulationUmschalten);
+        }
         if f {
             self.aktion(Aktion::Einpassen);
         }
@@ -848,6 +997,9 @@ impl App {
         }
         if let Some(rs) = frame.wgpu_render_state() {
             let info = rs.adapter.get_info();
+            // The 3D pipeline must be built for the format of the target texture; wgpu never
+            // hands it back, so it is kept here.
+            self.gpu_format = Some(rs.target_format);
             let backend = match info.backend.to_str() {
                 "vulkan" => "Vulkan",
                 "metal" => "Metal",
@@ -880,6 +1032,14 @@ impl eframe::App for App {
         self.zeit_messen(&ctx);
         self.gpu_erfassen(frame);
         self.groesse_pruefen(&ctx);
+        // The simulation runs in its own thread; take in what it sent since the last frame.
+        self.simulation.abholen();
+        if let Some(f) = self.simulation.fehler_nehmen() {
+            self.melden(format!("Simulation: {f}"), true);
+        }
+        if self.simulation.laeuft() {
+            ctx.request_repaint();
+        }
         if ctx.theme() != self.thema {
             ctx.set_theme(self.thema);
         }
@@ -918,6 +1078,11 @@ impl eframe::App for App {
             SCHLUESSEL_ZULETZT,
             anordnung::zuletzt_als_text(&self.zuletzt),
         );
+    }
+
+    fn on_exit(&mut self) {
+        // The solver thread must not outlive the window: it would keep a core busy.
+        self.simulation.beenden();
     }
 }
 

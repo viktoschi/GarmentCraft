@@ -11,8 +11,8 @@
 //! window leaves the full width to the other one.
 //!
 //! The side panels are capped at a share of the window ([`SEITE_ANTEIL`]) and scroll inside, so
-//! the windows in the middle keep their room also at the minimum window size. While the 3D window
-//! is a placeholder the 2D window has the larger minimum width ([`MIN_2D`]); see
+//! the windows in the middle keep their room also at the minimum window size. The 2D window keeps
+//! the larger minimum width ([`MIN_2D`]) – it needs room for the pattern; see
 //! [`teilung_breiten`].
 //!
 //! Every area is also named for assistive technology (role "pane"): "Bibliothek",
@@ -41,8 +41,7 @@ pub const MIN_3D: f32 = 120.0;
 /// Width of a window's frame; the content lies inside it.
 pub const RAHMEN: f32 = 2.0;
 /// Narrowest the 2D window gets while both windows are shown and there is room for both minima:
-/// 300 for the view inside the frame. Larger than [`MIN_3D`]: the 2D window holds the only
-/// working view so far.
+/// 300 for the view inside the frame. Larger than [`MIN_3D`]: the pattern needs the room.
 pub const MIN_2D: f32 = 300.0 + 2.0 * RAHMEN;
 /// Width of the divider between the 3D and the 2D window, and between the object browser and
 /// the properties.
@@ -300,14 +299,19 @@ fn fenster(app: &mut App, ui: &mut egui::Ui, rect: Rect, f: Fenster) {
             ui.strong(kurz);
             ui.separator();
             match f {
-                Fenster::Drei => crate::menue::werkzeugleiste_3d(ui),
+                Fenster::Drei => crate::menue::werkzeugleiste_3d(app, ui),
                 Fenster::Zwei => crate::menue::werkzeugleiste_2d(app, ui),
             }
         });
         kind.separator();
     }
     match f {
-        Fenster::Drei => ansicht_3d(&mut kind),
+        Fenster::Drei => app.ansicht3d.ui(
+            &mut kind,
+            app.simulation.bau(),
+            app.simulation.bild(),
+            app.gpu_format,
+        ),
         Fenster::Zwei => {
             let klick = app.ansicht.ui(
                 &mut kind,
@@ -330,22 +334,6 @@ fn fenster(app: &mut App, ui: &mut egui::Ui, rect: Rect, f: Fenster) {
     };
     ui.painter()
         .rect_stroke(rect, 0.0, rahmen, StrokeKind::Inside);
-}
-
-/// The 3D window's content until the 3D view exists: a calm placeholder.
-fn ansicht_3d(ui: &mut egui::Ui) {
-    let (rect, resp) = ui.allocate_exact_size(ui.available_size(), Sense::click());
-    resp.widget_info(|| WidgetInfo::labeled(Role::Canvas, true, "3D-Ansicht"));
-    let maler = ui.painter_at(rect);
-    maler.rect_filled(rect, 0.0, ui.visuals().extreme_bg_color);
-    let farbe = ui.visuals().weak_text_color();
-    let text = maler.layout(
-        "3D-Ansicht folgt – Körper und Simulation kommen in einer späteren Aufgabe".into(),
-        egui::FontId::proportional(14.0),
-        farbe,
-        (rect.width() - 24.0).max(40.0),
-    );
-    maler.galley(rect.center() - text.size() / 2.0, text, farbe);
 }
 
 #[cfg(test)]

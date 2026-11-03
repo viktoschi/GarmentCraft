@@ -14,6 +14,10 @@ klon3d-pattern = { path = "../klon3d-pattern" }
 klon3d-pipeline = { path = "../klon3d-pipeline" }
 # Only for the mesh check: `klon3d-pipeline` re-exports neither `Parameter` nor `pruefung`.
 klon3d-mesh = { path = "../klon3d-mesh" }
+# The simulation runs the solver itself (`src/simulation.rs`): the run, the solver and the
+# fabric come from these two.
+klon3d-sim = { path = "../klon3d-sim" }
+klon3d-koerper = { path = "../klon3d-koerper" }
 eframe = { version = "0.37", default-features = false, features = ["accesskit", "default_fonts", "persistence", "wgpu_no_default_features", "x11", "wayland"] }
 wgpu = { version = "30", default-features = false, features = ["std", "parking_lot", "dx12", "gles", "vulkan", "wgsl"] }
 

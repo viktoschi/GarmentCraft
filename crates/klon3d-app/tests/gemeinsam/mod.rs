@@ -38,6 +38,18 @@ pub fn mit_bluse() -> Harness<'static, App> {
     h
 }
 
+/// Is CLO's resizing folder there? The simulation takes its body from there; without it (the CI
+/// has no CLO installation) the simulation buttons are disabled and name the missing folder.
+pub fn koerperordner_da() -> bool {
+    let o = klon3d_koerper::koerper::ordner();
+    if o.is_dir() {
+        true
+    } else {
+        eprintln!("ohne Körperordner: {} fehlt", o.display());
+        false
+    }
+}
+
 /// Δ as `klon3d naehte` prints it (same expression as in `klon3d-cli`).
 pub fn delta_wie_cli(d: f64) -> String {
     format!("{:+.4}", if d.abs() < 5e-5 { 0.0 } else { d })

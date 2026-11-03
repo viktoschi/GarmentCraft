@@ -236,7 +236,7 @@ impl App {
 }
 
 /// Every shortcut with what it does, in the order of the help window.
-pub const TASTENKUERZEL: [(&str, &str); 14] = [
+pub const TASTENKUERZEL: [(&str, &str); 19] = [
     ("Strg+O", "Muster öffnen"),
     ("Strg+Q", "Beenden"),
     ("Strg+Tab", "zwischen 3D- und 2D-Fenster wechseln"),
@@ -246,11 +246,16 @@ pub const TASTENKUERZEL: [(&str, &str); 14] = [
     ("Umschalt+Tab", "vorheriges Teil wählen"),
     ("Umschalt+S", "Nähte anzeigen ein/aus"),
     ("Umschalt+Z", "Längen anzeigen ein/aus"),
+    ("Leertaste", "Simulation starten/anhalten"),
     ("Esc", "Auswahl aufheben, Dialog schließen"),
     ("Mausrad", "Zoom um den Mauszeiger"),
     ("Ziehen", "Ansicht verschieben"),
     ("Klick", "Teil wählen"),
     ("Klick ins Fenster", "3D- oder 2D-Fenster aktivieren"),
+    ("3D: Mausrad", "Kamera näher/weiter"),
+    ("3D: Ziehen", "Kamera drehen"),
+    ("3D: mittlere Taste ziehen", "Kamera verschieben"),
+    ("3D: Doppelklick", "alles einpassen"),
 ];
 
 /// The table of the help window "Tastenkürzel".

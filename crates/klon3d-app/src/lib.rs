@@ -10,6 +10,8 @@
 //! | [`bibliothek`] | the library panel (file browser at the left) |
 //! | [`panele`] | object browser (pieces, seams, fabrics), properties, status bar |
 //! | [`ansicht2d`] | the 2D view and its view math |
+//! | [`ansicht3d`] | the 3D view: wgpu paint callback, orbit camera, vertex data |
+//! | [`simulation`] | the simulation runner: worker thread, commands, snapshots |
 //! | [`dateiwahl`] | folder listing shared by the file dialog and the library; the file dialog |
 //! | [`muster`] | a loaded pattern as plain data, no egui types |
 //!
@@ -17,6 +19,7 @@
 
 pub mod anordnung;
 pub mod ansicht2d;
+pub mod ansicht3d;
 pub mod app;
 pub mod bibliothek;
 pub mod dateiwahl;
@@ -25,5 +28,6 @@ pub mod fenster;
 pub mod menue;
 pub mod muster;
 pub mod panele;
+pub mod simulation;
 
 pub use app::App;

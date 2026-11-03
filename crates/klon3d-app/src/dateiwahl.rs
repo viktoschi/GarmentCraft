@@ -30,6 +30,10 @@ pub enum Zweck {
     Nahtliste,
     /// Where to write a seam list: the dialog in save mode ([`Zweck::speichern`]).
     NahtlisteSpeichern,
+    /// A fabric file (`.zfab`) for the simulation.
+    Stoff,
+    /// A CLO project (`.zprj`) that brings its own body.
+    KoerperProjekt,
 }
 
 impl Zweck {
@@ -39,6 +43,8 @@ impl Zweck {
             Zweck::Muster => &["sm2d"],
             Zweck::Massdatei => &["smis"],
             Zweck::Nahtliste | Zweck::NahtlisteSpeichern => &["naehte"],
+            Zweck::Stoff => &["zfab"],
+            Zweck::KoerperProjekt => &["zprj"],
         }
     }
 
@@ -49,6 +55,8 @@ impl Zweck {
             Zweck::Massdatei => "Maßdatei wählen",
             Zweck::Nahtliste => "Nahtliste wählen",
             Zweck::NahtlisteSpeichern => "Nahtliste speichern",
+            Zweck::Stoff => "Stoff wählen",
+            Zweck::KoerperProjekt => "Körper laden",
         }
     }
 

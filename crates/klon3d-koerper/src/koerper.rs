@@ -271,7 +271,20 @@ pub struct Anordnung {
 }
 
 /// Segmente und Landmarken zum geformten `netz` aus dem Resizing-Ordner.
+///
+/// CLOs Listen haben Vorrang: sie sind die Referenz, gegen die die Rechnung
+/// geprüft ist. Fehlt der Ordner oder eine Liste (Resizing-Ordner eines fremden
+/// Rechners), kommen die Landmarken aus dem Netz selbst — siehe
+/// [`crate::anordnung_netz::aus_netz`].
 pub fn anordnung(ordner: &Path, netz: &Netz) -> Result<Anordnung, String> {
+    match anordnung_aus_clo(ordner, netz) {
+        Ok(an) => Ok(an),
+        Err(grund) => crate::anordnung_netz::aus_netz(netz, 10.0)
+            .map_err(|e| format!("CLO-Listen: {grund}; aus dem Netz: {e}")),
+    }
+}
+
+fn anordnung_aus_clo(ordner: &Path, netz: &Netz) -> Result<Anordnung, String> {
     use crate::massband::{segment, Messdaten};
     let d = Messdaten::laden(ordner).map_err(|e| format!("Segmente und Landmarken: {e}"))?;
     let n = netz.punkte.len();

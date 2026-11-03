@@ -559,7 +559,7 @@ fn naht_eigenschaften(m: &Muster, n: &Nahtergebnis, ui: &mut egui::Ui) {
         });
 }
 
-/// Bottom panel: frame rate, GPU, largest deviation, message.
+/// Bottom panel: frame rate, GPU, the 3D camera, the simulation, largest deviation, message.
 pub fn statusleiste(app: &mut App, ui: &mut egui::Ui) {
     ui.horizontal(|ui| {
         let fps = app
@@ -570,6 +570,34 @@ pub fn statusleiste(app: &mut App, ui: &mut egui::Ui) {
         );
         ui.separator();
         ui.label(app.gpu_text());
+        ui.separator();
+        // The solver runs in its own thread: its own rate, its phase and its frame number.
+        let (text, hinweis) = match (app.simulation.eingeschaltet(), app.simulation.laeuft()) {
+            (false, _) => (
+                "Simulation: –".to_string(),
+                "3D-Kleidung › Simulation starten/anhalten".to_string(),
+            ),
+            (true, true) => (
+                format!(
+                    "Simulation: {} ({:.1} Bilder/s)",
+                    app.simulation.phase_name(),
+                    app.simulation.bilder_pro_sekunde().unwrap_or(0.0)
+                ),
+                "Lösung läuft im Hintergrund; die Rate ist die Rechenzeit je Bild".to_string(),
+            ),
+            (true, false) => (
+                format!(
+                    "Simulation: {} angehalten nach Bild {}",
+                    app.simulation.phase_name(),
+                    app.simulation.bildnummer()
+                ),
+                "Leertaste oder 3D-Kleidung › Simulation starten/anhalten setzt fort".to_string(),
+            ),
+        };
+        ui.label(text).on_hover_text(hinweis);
+        ui.separator();
+        ui.label(app.ansicht3d.kamera_text())
+            .on_hover_text("Blickwinkel und Abstand der 3D-Kamera; Mausrad zoomt, Ziehen dreht");
         ui.separator();
         let abw = app.abweichung_text();
         let auff = app

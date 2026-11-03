@@ -102,9 +102,6 @@ fn werkzeugleisten_mit_gesperrten_knoepfen() {
         ("Speichern", "Strg+S"),
         ("Rückgängig", "Strg+Z"),
         ("Wiederholen", "Strg+Y"),
-        ("Simulation", ""),
-        ("Einzelschritt", ""),
-        ("Zurücksetzen", ""),
         ("Avatar", "Umschalt+A"),
         ("Dehnungskarte", "Alt+7"),
         ("Passformkarte", "Alt+8"),
@@ -118,6 +115,39 @@ fn werkzeugleisten_mit_gesperrten_knoepfen() {
         h.run();
         assert!(hinweis_da(&h, SPAETER), "{knopf}: kein Hinweis");
         assert!(hinweis_da(&h, kuerzel), "{knopf}: Kürzel {kuerzel} fehlt");
+    }
+    // Nothing has run yet, so resetting is disabled and says why; the simulation itself and a
+    // single step work with pattern and body.
+    let zurueck = h
+        .query_all_by_role_and_label(Role::Button, "Zurücksetzen")
+        .find(|n| !in_einem_menue(n))
+        .expect("Zurücksetzen in keiner Werkzeugleiste");
+    assert!(zurueck.accesskit_node().is_disabled(), "Zurücksetzen frei");
+    zurueck.hover();
+    h.run();
+    assert!(
+        hinweis_da(&h, "noch keine Simulation gelaufen"),
+        "Zurücksetzen: kein Hinweis"
+    );
+    // The working buttons of the 3D toolbar. Simulation and single step need CLO's body folder;
+    // without it (the CI has no CLO installation) they are disabled and say which folder is missing.
+    for knopf in ["Simulation", "Einzelschritt", "Netz", "Kamera einpassen"] {
+        let k = h
+            .query_all_by_role_and_label(Role::Button, knopf)
+            .find(|n| !in_einem_menue(n))
+            .unwrap_or_else(|| panic!("{knopf} in keiner Werkzeugleiste"));
+        let braucht_koerper = matches!(knopf, "Simulation" | "Einzelschritt");
+        if braucht_koerper && !koerperordner_da() {
+            assert!(k.accesskit_node().is_disabled(), "{knopf} frei");
+            k.hover();
+            h.run();
+            assert!(
+                hinweis_da(&h, "Körperordner fehlt"),
+                "{knopf}: kein Hinweis"
+            );
+            continue;
+        }
+        assert!(!k.accesskit_node().is_disabled(), "{knopf} gesperrt");
     }
     // The working buttons of the 2D toolbar.
     for knopf in [

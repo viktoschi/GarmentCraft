@@ -1,5 +1,5 @@
 //! `bildschirmfoto [--muster <datei.sm2d>] [--aus <bild.png>] [--breite <punkte>] [--hoehe <punkte>]`
-//! – renders the application window to a PNG without opening one.
+//! `[--simulieren <bilder>]` – renders the application window to a PNG without opening one.
 //!
 //! Why an example and not a test: it needs a wgpu adapter. Where there is none (a headless CI
 //! runner without a software Vulkan) it reports that and exits with code 3 instead of failing.
@@ -8,19 +8,30 @@
 //! by actions instead of clicks, and every step can be photographed. Nothing here needs a desktop,
 //! a window handle or the focus.
 //!
-//! Run with `cargo run -p klon3d-app --example bildschirmfoto --features fotos -- --muster …`.
+//! ## Simulation
+//!
+//! `--simulieren <bilder>` starts the simulation of the pattern shown (the same call the menu
+//! makes, [`App::simulation_starten`]), lets the worker build the scene, computes `<bilder>`
+//! solver frames and photographs the 3D view with them. The frames are drawn by the 3D view's
+//! wgpu paint callback, so this needs the real renderer ([`WgpuTestRenderer`] hands the render
+//! state to the window, exactly as eframe does). One solver frame of `bluse3_v2` takes about
+//! 260–350 ms in a release build; the scene itself takes longer than the frames.
+//!
+//! Run with `cargo run -p klon3d-app --example bildschirmfoto -- --muster … --simulieren 2`.
 
 use std::path::PathBuf;
 use std::process::ExitCode;
+use std::time::{Duration, Instant};
 
 use eframe::egui;
 use egui_kittest::wgpu::WgpuTestRenderer;
 use egui_kittest::Harness;
+use klon3d_app::simulation::Befehl;
 use klon3d_app::App;
 
 const AUFRUF: &str = "Aufruf: bildschirmfoto [--muster <datei.sm2d>] [--aus <bild.png>]\n\
                      \x20             [--breite <punkte>] [--hoehe <punkte>] [--dunkel|--hell]\n\
-                     \x20             [--massstab <punkte je Pixel>]\n\
+                     \x20             [--massstab <punkte je Pixel>] [--simulieren <bilder>]\n\
                      Kennung 3: kein Grafikbeschleuniger (wgpu-Adapter) vorhanden";
 
 /// The window as the app opens it (`main.rs`), unless the caller asks for another size.
@@ -75,6 +86,13 @@ fn main() -> ExitCode {
                 }
                 Err(e) => return e,
             },
+            "--simulieren" => match anzahl(&args, i, AUFRUF) {
+                Ok((w, n)) => {
+                    opt.simulieren = w;
+                    i += n;
+                }
+                Err(e) => return e,
+            },
             "--dunkel" => {
                 opt.dunkel = Some(true);
                 i += 1;
@@ -110,6 +128,8 @@ struct Optionen {
     massstab: f32,
     /// `None`: whatever egui's stored theme is; `Some(true)`: dark, `Some(false)`: light.
     dunkel: Option<bool>,
+    /// Solver frames to compute before the photo; 0 = no simulation.
+    simulieren: usize,
 }
 
 impl Default for Optionen {
@@ -121,6 +141,7 @@ impl Default for Optionen {
             hoehe: HOEHE,
             massstab: 1.0,
             dunkel: None,
+            simulieren: 0,
         }
     }
 }
@@ -139,6 +160,21 @@ fn zahl(args: &[String], i: usize, aufruf: &str) -> Result<(f32, usize), ExitCod
     }
 }
 
+/// A whole number of frames; 0 is allowed (no frame), negative and fractional values are not.
+fn anzahl(args: &[String], i: usize, aufruf: &str) -> Result<(usize, usize), ExitCode> {
+    let Some(text) = args.get(i + 1) else {
+        eprintln!("{} ohne Wert\n{aufruf}", args[i]);
+        return Err(ExitCode::FAILURE);
+    };
+    match text.parse::<usize>() {
+        Ok(v) => Ok((v, 2)),
+        _ => {
+            eprintln!("{}: keine ganze Zahl: {text:?}\n{aufruf}", args[i]);
+            Err(ExitCode::FAILURE)
+        }
+    }
+}
+
 /// `WgpuTestRenderer::new` sets up the device at once and panics without an adapter; caught here so
 /// that a machine without one gets exit code 3 and a sentence instead of a backtrace.
 fn renderer() -> Option<WgpuTestRenderer> {
@@ -147,6 +183,91 @@ fn renderer() -> Option<WgpuTestRenderer> {
     let r = std::panic::catch_unwind(WgpuTestRenderer::new).ok();
     std::panic::set_hook(vorher);
     r
+}
+
+/// Give up after this long: the scene build (seconds) and the frames (≈ 0.3 s each) must fit.
+/// Bounded so that a stuck worker ends in an error instead of a hanging run.
+const SIMULATIONSFRIST: Duration = Duration::from_secs(600);
+
+/// Between two window passes: the solver works on the other cores, so a pause costs nothing but
+/// keeps this thread from fighting it for a core.
+const SCHRITT_PAUSE: Duration = Duration::from_millis(20);
+
+/// Run the simulation of the pattern shown for `bilder` frames and hold it there; the window then
+/// shows that frame in the 3D view.
+///
+/// The scene is built by the worker thread ([`klon3d_app::simulation`]) and arrives as messages,
+/// which the window takes in during its own pass – hence the loop of [`Harness::step`] until the
+/// frame number is reached. [`Harness::run`] cannot be used: the worker asks for repaints while it
+/// computes, so `run` would never see a settled window.
+fn simulieren(figuren: &mut Harness<'_, App>, bilder: usize) -> Result<(), String> {
+    let ctx = figuren.ctx.clone();
+    if figuren.state().muster.is_none() {
+        return Err("--simulieren braucht ein geladenes Muster (--muster <datei.sm2d>)".into());
+    }
+    let start = Instant::now();
+    // The same call the menu makes, so the example exercises the window's own path.
+    if !figuren.state_mut().simulation_starten(&ctx) {
+        let meldung = figuren.state().meldung.clone();
+        return Err(format!("Simulation startet nicht: {meldung}"));
+    }
+    // `starten` lets the worker run freely (`Laufen`). The command is in the channel long before
+    // the worker has built the scene, so it holds after exactly these frames.
+    figuren
+        .state_mut()
+        .simulation
+        .befehl(Befehl::Schritte(bilder));
+
+    let mut szenenzeit = None;
+    loop {
+        figuren.step();
+        {
+            let s = &figuren.state().simulation;
+            if let Some(f) = s.fehler() {
+                return Err(format!("Simulation: {f}"));
+            }
+            if szenenzeit.is_none() && s.bereit() {
+                let dauer = start.elapsed().as_secs_f64();
+                println!("Simulation: Szene steht nach {dauer:.1} s");
+                szenenzeit = Some(dauer);
+            }
+            if s.bereit() && s.bildnummer() >= bilder {
+                break;
+            }
+        }
+        if start.elapsed() > SIMULATIONSFRIST {
+            let s = &figuren.state().simulation;
+            return Err(format!(
+                "Simulation nach {} s abgebrochen: bereit {}, Bild {} von {bilder}",
+                SIMULATIONSFRIST.as_secs(),
+                s.bereit(),
+                s.bildnummer()
+            ));
+        }
+        std::thread::sleep(SCHRITT_PAUSE);
+    }
+
+    // Hold the run: no frame may move the cloth while the picture is taken.
+    figuren.state_mut().simulation.befehl(Befehl::Anhalten);
+    let ende = Instant::now() + Duration::from_secs(30);
+    while figuren.state().simulation.laeuft() && Instant::now() < ende {
+        figuren.step();
+        std::thread::sleep(SCHRITT_PAUSE);
+    }
+
+    let s = &figuren.state().simulation;
+    let (bau, x_punkte) = s
+        .bau()
+        .map(|b| (b.herkunft.clone(), b.koerper.len()))
+        .unwrap_or((String::new(), 0));
+    println!(
+        "Simulation: Bild {} ({}), Körper {x_punkte} Punkte, {} in {} s",
+        s.bildnummer(),
+        s.phase_name(),
+        bau,
+        start.elapsed().as_secs_f64()
+    );
+    Ok(())
 }
 
 fn laufen(opt: &Optionen) -> Result<(), String> {
@@ -185,6 +306,16 @@ fn laufen(opt: &Optionen) -> Result<(), String> {
     figuren.run();
     figuren.run();
 
+    // After those passes: the 3D window needs its width from the layout, and the simulation
+    // frames must not be computed while the panels still settle.
+    if opt.simulieren > 0 {
+        simulieren(&mut figuren, opt.simulieren)?;
+        // The last frames built the 3D vertex data for the frame reached; two passes let the
+        // camera frame the scene and the 3D view draw it.
+        figuren.run();
+        figuren.run();
+    }
+
     let bild = figuren
         .render()
         .map_err(|e| format!("kein Bild gerendert: {e}"))?;
@@ -197,13 +328,17 @@ fn laufen(opt: &Optionen) -> Result<(), String> {
     bild.save(&opt.aus)
         .map_err(|e| format!("{}: {e}", opt.aus.display()))?;
     println!(
-        "{} – {} x {} Bildpunkte{}",
+        "{} – {} x {} Bildpunkte{}{}",
         opt.aus.display(),
         bild.width(),
         bild.height(),
         match &opt.muster {
             Some(p) => format!(", Muster {}", p.display()),
             None => String::new(),
+        },
+        match opt.simulieren {
+            0 => String::new(),
+            n => format!(", Simulierung nach {n} Bildern"),
         }
     );
     Ok(())

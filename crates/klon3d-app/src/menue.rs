@@ -11,6 +11,7 @@ use eframe::egui;
 use egui::{Atom, Button, RichText, Theme};
 
 use crate::anordnung::{self, Bereich};
+use crate::ansicht3d::Blickwinkel;
 use crate::app::{Aktion, App, SPAETER};
 use crate::muster::dateiname;
 
@@ -59,6 +60,26 @@ fn eintrag_fuer_ziel(ui: &mut egui::Ui, app: &mut App, text: &str, aktion: Aktio
         .on_disabled_hover_text(ERST_MUSTER);
     let r = match &ziel {
         Some(z) => r.on_hover_text(format!("für {z}")),
+        None => r,
+    };
+    if r.clicked() {
+        app.aktion(aktion);
+    }
+}
+
+/// A menu entry that runs the simulation: enabled when nothing is missing; the hover text then
+/// names the file that is (`simulation::hindernis`).
+fn eintrag_fuer_simulation(
+    ui: &mut egui::Ui,
+    app: &mut App,
+    text: &str,
+    kuerzel: &str,
+    aktion: Aktion,
+) {
+    let sperre = app.vorgaben().err();
+    let r = ui.add_enabled(sperre.is_none(), knopf(text, kuerzel));
+    let r = match &sperre {
+        Some(g) => r.on_disabled_hover_text(g),
         None => r,
     };
     if r.clicked() {
@@ -122,9 +143,24 @@ pub fn menues(app: &mut App, ui: &mut egui::Ui) {
         eintrag(ui, app, "Auswahl aufheben", "Esc", Aktion::AuswahlAufheben);
     });
     ui.menu_button("3D-Kleidung", |ui| {
-        spaeter(ui, "Simulation starten/anhalten", "");
-        spaeter(ui, "Einzelschritt", "");
-        spaeter(ui, "Zurücksetzen", "");
+        eintrag_fuer_simulation(
+            ui,
+            app,
+            "Simulation starten/anhalten",
+            "",
+            Aktion::SimulationUmschalten,
+        );
+        eintrag_fuer_simulation(ui, app, "Einzelschritt", "", Aktion::SimulationSchritt(1));
+        let laeuft = app.simulation.eingeschaltet();
+        let r = ui.add_enabled(laeuft, knopf("Zurücksetzen", ""));
+        let r = if laeuft {
+            r.on_hover_text("zurück auf den Stand beim Anziehen")
+        } else {
+            r.on_disabled_hover_text("noch keine Simulation gelaufen")
+        };
+        if r.clicked() {
+            app.aktion(Aktion::SimulationZuruecksetzen);
+        }
         ui.separator();
         spaeter(ui, "Anordnen", "");
         spaeter(ui, "Netzauflösung…", "");
@@ -132,7 +168,14 @@ pub fn menues(app: &mut App, ui: &mut egui::Ui) {
     });
     ui.menu_button("2D-Schnitt", |ui| schnitt(app, ui));
     ui.menu_button("Materialien", |ui| {
-        spaeter(ui, "Stoff zuweisen…", "");
+        let r = ui.button("Stoff zuweisen…");
+        let r = match &app.stoff {
+            Some(m) => r.on_hover_text(format!("derzeit: {}", m.name)),
+            None => r.on_hover_text("derzeit: Radical Rubber 0,4 mm"),
+        };
+        if r.clicked() {
+            app.aktion(Aktion::StoffWaehlen);
+        }
         let r = ui.add_enabled(app.stoffordner.is_some(), Button::new("Stoffbibliothek"));
         let r = match &app.stoffordner {
             Some(o) => r.on_hover_text(format!("Bibliothek bei {}", o.display())),
@@ -143,7 +186,14 @@ pub fn menues(app: &mut App, ui: &mut egui::Ui) {
         }
     });
     ui.menu_button("Avatar", |ui| {
-        spaeter(ui, "Körper laden…", "Strg+Umschalt+A");
+        let r = ui.button("Körper laden…");
+        let r = match &app.koerper {
+            Some(k) => r.on_hover_text(format!("derzeit: {}", k.pfad().display())),
+            None => r.on_hover_text("derzeit: die Maßdatei des Musters"),
+        };
+        if r.clicked() {
+            app.aktion(Aktion::KoerperWaehlen);
+        }
         eintrag_fuer_ziel(ui, app, "Maßdatei wählen…", Aktion::MassdateiWaehlen);
         ui.separator();
         spaeter(ui, "Avatar anzeigen", "Umschalt+A");
@@ -273,12 +323,24 @@ fn schnitt(app: &mut App, ui: &mut egui::Ui) {
 
 fn anzeige(app: &mut App, ui: &mut egui::Ui) {
     ui.menu_button("Blickwinkel", |ui| {
-        for text in ["Vorne", "Hinten", "Links", "Rechts", "Oben"] {
-            spaeter(ui, text, "");
+        for b in Blickwinkel::ALLE {
+            let an = app.ansicht3d.ist_blickwinkel(b);
+            if ui.radio(an, b.name()).clicked() {
+                app.aktion(Aktion::BlickwinkelSetzen(b));
+            }
         }
+        ui.separator();
+        eintrag(ui, app, "Einpassen", "", Aktion::Einpassen3d);
     });
     ui.menu_button("3D-Kleidung", |ui| {
-        spaeter(ui, "Netz", "");
+        haken(
+            ui,
+            app,
+            "Netz",
+            "",
+            app.ansicht3d.netz,
+            Aktion::NetzUmschalten,
+        );
         spaeter(ui, "Dehnungskarte", "Alt+7");
         spaeter(ui, "Passformkarte", "Alt+8");
         spaeter(ui, "Abstandskarte", "");
@@ -410,11 +472,72 @@ fn spaeter_knopf(ui: &mut egui::Ui, text: &str, wofuer: &str) {
         .on_disabled_hover_text(format!("{wofuer} – {SPAETER}"));
 }
 
-/// The toolbar of the 3D window: simulation and maps, all for later tasks.
-pub fn werkzeugleiste_3d(ui: &mut egui::Ui) {
-    spaeter_knopf(ui, "Simulation", "Simulation starten/anhalten");
-    spaeter_knopf(ui, "Einzelschritt", "einen Simulationsschritt");
-    spaeter_knopf(ui, "Zurücksetzen", "Simulation zurücksetzen");
+/// The toolbar of the 3D window: simulation, avatar and maps. The maps come later.
+pub fn werkzeugleiste_3d(app: &mut App, ui: &mut egui::Ui) {
+    let sperre = app.vorgaben().err();
+    let text = |grund: &str| match &sperre {
+        Some(g) => format!("{grund} – {g}"),
+        None => grund.to_string(),
+    };
+
+    let laeuft = app.simulation.laeuft();
+    let beschriftung = if laeuft {
+        "Anhalten"
+    } else if app.simulation.bereit() {
+        "Weiter"
+    } else {
+        "Simulation"
+    };
+    let hinweis = text(if laeuft {
+        "anhalten (Leertaste)"
+    } else {
+        "Simulation starten (Leertaste)"
+    });
+    let r = ui
+        .add_enabled(sperre.is_none(), Button::new(beschriftung))
+        .on_hover_text(&hinweis);
+    // A disabled button does not hover: without this the reason for the lock would never show.
+    let r = match &sperre {
+        Some(_) => r.on_disabled_hover_text(&hinweis),
+        None => r,
+    };
+    if r.clicked() {
+        app.aktion(Aktion::SimulationUmschalten);
+    }
+    let r = ui
+        .add_enabled(sperre.is_none(), Button::new("Einzelschritt"))
+        .on_hover_text(text("einen Löserschritt rechnen"));
+    let r = match &sperre {
+        Some(_) => r.on_disabled_hover_text(text("einen Löserschritt rechnen")),
+        None => r,
+    };
+    if r.clicked() {
+        app.aktion(Aktion::SimulationSchritt(1));
+    }
+    if ui
+        .add_enabled(app.simulation.eingeschaltet(), Button::new("Zurücksetzen"))
+        .on_hover_text(text("zurück auf den Stand beim Anziehen"))
+        .on_disabled_hover_text("noch keine Simulation gelaufen")
+        .clicked()
+    {
+        app.aktion(Aktion::SimulationZuruecksetzen);
+    }
+    ui.separator();
+    let netz = app.ansicht3d.netz;
+    if ui
+        .add(Button::selectable(netz, "Netz"))
+        .on_hover_text("Kanten des Stoffs als Drahtgitter")
+        .clicked()
+    {
+        app.aktion(Aktion::NetzUmschalten);
+    }
+    if ui
+        .button("Kamera einpassen")
+        .on_hover_text("den Körper ganz ins Bild holen")
+        .clicked()
+    {
+        app.aktion(Aktion::Einpassen3d);
+    }
     ui.separator();
     spaeter_knopf(ui, "Avatar", "Avatar anzeigen (Umschalt+A)");
     spaeter_knopf(ui, "Dehnungskarte", "Dehnungskarte (Alt+7)");

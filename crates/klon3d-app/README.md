@@ -1,13 +1,57 @@
 # klon3d-app – application window (stage 6)
 
 Task: [#34](https://github.com/viktoschi/klon3d/issues/34) · claimed by `claude-app-1101` ·
-branch `claude/vigilant-babbage-idsu9r` · base `ec76e25`
+branch `claude/vigilant-babbage-idsu9r` · base `ec76e25` ·
+since 2026-11-03 [#56](https://github.com/viktoschi/klon3d/issues/56) on branch `56-3d`, base `e4dffb8`
 
 This file is the **handoff**: it says what is decided, what is done and which steps remain, so that any
 session – Claude, another agent or a human – can continue without the chat history. Tick a step when it is
 done and committed; update "Status" at the top when you stop.
 
 ## Status
+
+**2026-11-03 - 3D view and simulation, [#56](https://github.com/viktoschi/klon3d/issues/56)** (branch
+`56-3d`, base `e4dffb8`): the 3D window now draws the body and the cloth, and the solver runs from the
+window. Two new modules carry it: `src/ansicht3d.rs` (the view) and `src/simulation.rs` (the worker).
+Both are wired into `app.rs` (state, `Aktion`s, `vorgaben`, `gpu_erfassen`, end of frame), `menue.rs`
+(3D-Kleidung, Materialien, Avatar, Anzeige > Blickwinkel and 3D-Kleidung > Netz, the 3D toolbar),
+`panele.rs` (status bar: phase, solver frames per second, frame number, camera), `dialoge.rs`
+(three mouse gestures and the space bar in the shortcut table), `dateiwahl.rs` (`Zweck::Stoff` for
+`.zfab`, `Zweck::KoerperProjekt` for `.zprj`) and `fenster.rs` (the placeholder is gone).
+
+* **3D view** (`ansicht3d.rs`): a `egui_wgpu` paint callback on the app's own device - no second GPU
+  instance - draws triangles with flat normals turned towards the camera, sorted back to front (no depth
+  buffer, `MSAA = 1`), plus the mesh edges as a `LineList` when "Netz" is on. Orbit camera in metres,
+  z up, front at -y: drag rotates (pitch capped at 85 degrees), middle drag moves the target, the wheel
+  zooms, a double click frames the scene again. `Blickwinkel` has five standard views and
+  `einpassen` puts the box around body and cloth into the view. Matrices and vertex bytes are written
+  by hand (`f32`/`u32` slices behind `from_raw_parts`), so neither `glam` nor `bytemuck` came into
+  `Cargo.lock`. The target colour format is taken from `frame.wgpu_render_state().target_format`
+  (`App::gpu_format`), because wgpu never hands it back; without wgpu (headless tests) the callback is
+  not added at all and the window shows a hint - the canvas role and label "3D-Ansicht" stay.
+* **Simulation** (`simulation.rs`): the same construction as `klon3d-mcp/src/simulation.rs` (unroll:
+  `huellen` -> `platzieren` -> `szene_aus` -> `p.klebungen` -> `klebungen_setzen`; `weiten = true`,
+  `reduktion = 0.0`, `standard_simparameter()`), but in its own thread with two channels: commands in
+  (`Befehl::{Laufen, Anhalten, Schritte(n), Zuruecksetzen, Beenden}`), snapshots out. Each snapshot
+  carries the positions, frame number, phase and timings; the UI takes the newest with `abholen()` and
+  requests a repaint while the solver runs, so the solver's rate is never the window's rate. A pattern
+  change, a fabric or body change and `on_exit` call `beenden()`, which joins the thread - no core is
+  left busy after the window closes.
+* **Fabric and body**: Materialien > "Stoff zuweisen..." reads a `.zfab` through
+  `klon3d_pipeline::stoff::stoff_laden` (default `RADICAL_RUBBER_04`), Avatar > "Körper laden..." a
+  `.zprj` (`Koerperquelle::CloProjekt`); a dropped `.zfab`/`.zprj` does the same. Without a `.zprj` the
+  body comes from the measurement file of the pattern (`Koerperquelle::MassdateiMitOrdner`).
+* **What is disabled, and why**: the three simulation entries are free only when
+  `simulation::hindernis` finds nothing missing; otherwise they are greyed out and the hover text names
+  the file (e.g. "Lagedatei fehlt: ..."). "Zurücksetzen" needs a running simulation. "Anordnen" and
+  "Netzauflösung..." stay for a later task, the maps too.
+* **Not here** (named in the PR of #56): the solver still has no `mit_geraet(device, queue)`, so the SIM
+  side runs on the CPU; the GPU path would need its own wgpu instance. The exporter and the maps are
+  #57 and #58.
+* Tests: unit tests of both modules (`ansicht3d`, `simulation`), and `tests/simulation.rs` +
+  `tests/ansicht3d.rs` next to the updated `tests/oberflaeche.rs` and `tests/fensteranordnung.rs`;
+  `examples/bildschirmfoto.rs --simulieren <bilder>` renders the 3D view to `bilder/simulation_3d.png`
+  without a window (see "Environment").
 
 **2026-11-02 - mesh check, [#46](https://github.com/viktoschi/klon3d/issues/46)** (branch
 `46-mesh-check`, base `4b1d229`): 3D-Kleidung > "Netzprüfung" is enabled with a pattern (without
@@ -353,8 +397,8 @@ nested `egui::Panel` stores its size from the first frame, which can be tiny –
 
 First slice of stage 6 in PLAN.md: an `eframe` window with the `wgpu` renderer and the layout the user asked
 for on 2026-10-20 – **dark design** (switchable to light, saved), **menus**, **buttons** – working on the
-2D pattern. 3D view, simulation, material, OBJ/DXF export and the maps are later tasks; their menu entries
-exist but are disabled.
+2D pattern. The 3D view, the simulation, fabric and body came with #56 (2026-11-03); OBJ/DXF export and
+the maps are later tasks (#57, #58) and their menu entries are still disabled.
 
 ## Decisions
 
@@ -385,30 +429,38 @@ exist but are disabled.
 | `src/dialoge.rs` | floating windows: file dialog, error, help (shortcuts, about), Informationen, Netzprüfung (#46), drop hint |
 | `src/muster.rs` | (6c) also each piece's grainline (`Teil::fadenlauf`, `fadenlauf_fehler`) and the seam suggestion `naehte_vorschlagen` (seam list text, numbers of `klon3d naehte --vorschlag`); loading without UI: `.sm2d` → `Auswertung` → piece outlines (`ev.stueck_umriss`), circumference (`ev.umriss_laenge`), boundary edges (`ev.teilrand(stueck, Kurvenquelle::Seamly)`), seam report (`naehte::lies_nahtliste` + `pruefe_naehte`, the same numbers as `klon3d naehte`); measurement file as the pattern names it (see `klon3d-view/src/main.rs`, `Blatt::laden`) or chosen by hand |
 | `src/ansicht2d.rs` | 2D view: pieces laid out side by side (as `klon3d-view` `auslegen`), pan, zoom around the cursor, fit, hit test, selection highlight, seams, edge lengths, scale bar; (6c) grainlines with arrow heads (`pfeilspitzen`) and notch ticks (`passzeichen`) |
+| `src/ansicht3d.rs` | (#56) 3D view: `Ansicht3d` (orbit camera, five `Blickwinkel`, fit, wireframe switch), the vertex data built from a `Bau` + snapshot by hand, two `egui_wgpu` pipelines (triangles, edges) and the WGSL shader as a `const`; without a target format only the hint text |
+| `src/simulation.rs` | (#56) the solver in its own thread: `Vorgaben` (pattern, measurement file, material, optional body) with `hindernis`, the unrolled construction from `klon3d-mcp`, `Befehl`/`Meldung` channels, `Schnappschuss` and `Bau` for the view |
 | `src/dateiwahl.rs` | folder listing `Verzeichnis` (shared with the library) and the modal file dialog; (6c) save mode (`Zweck::NahtlisteSpeichern`: file name field, question before overwriting) |
 | `tests/gemeinsam/mod.rs` | helpers of the UI tests: windows, independent Bluse3 evaluation, grid rows, menus, storage |
 | `tests/oberflaeche.rs` | kittest: pieces and seams against `pruefe_naehte`, selection, theme, menus and their disabled entries, shortcuts, file dialog, drag and drop, measurement file choice, minimum size, all test patterns |
 | `tests/fensteranordnung.rs` | kittest: toolbars, Fenster toggles, Strg+Tab, Umschalt+S/Z, edge lengths, recent files, library, fabrics, Informationen, seam properties, old stored state, reset; (review 7b) double click on a folder, names vs lengths, names in the default arrangement, seam grid inside the object browser, help windows centred, recent files through `..` |
 | `tests/fadenlauf_naehte.rs` | kittest (6c): grainlines against `Auswertung::fadenlauf` (Bluse3 v2 and a copy with a grainline on every piece) and drawn one per piece, notch ticks one per notch, both toggles stored (old text = on), disabled without a pattern, "Nähte vorschlagen…" writes a `.naehte` with as many seams as `schlage_naehte_vor`, loads it, asks before overwriting |
 | `tests/netzpruefung.rs` | kittest (#46): Netzprüfung disabled without a pattern (hover text), the report of the Bluse3 v2 with the numbers of an independent `vernetze` + `pruefe` (totals and one row per piece), closing by button, Esc and loading another pattern |
-| `examples/bildschirmfoto.rs` | renders the window with kittest's wgpu renderer to PNG, no window and no focus taken (`--muster`, `--aus`, `--breite`, `--hoehe`, `--massstab`, `--dunkel`/`--hell`). kittest prefers a software adapter, so the status bar shows e.g. "Microsoft Basic Render Driver" – not the GPU the app uses |
+| `tests/simulation.rs` | (#56) the solver from the window without one: `hindernis` names the missing file, start with short `Anziehen` values, at least two frames with moved points, hold (frame number stays), one single step adds exactly one frame, reset gives the start positions back bit for bit; after two frames the positions equal a run of `klon3d_pipeline::ablauf` made directly (1e-9, release), and twenty drawn frames while the solver works stay under 50 ms (release) |
+| `tests/ansicht3d.rs` | (#56) the camera without a GPU: five distinct `Blickwinkel`, `kamera_text`, `ist_blickwinkel`, and `Ansicht3d::ui` with `format: None` showing the hint and the canvas role "3D-Ansicht" |
+| `examples/bildschirmfoto.rs` | renders the window with kittest's wgpu renderer to PNG, no window and no focus taken (`--muster`, `--aus`, `--breite`, `--hoehe`, `--massstab`, `--dunkel`/`--hell`; #56 `--simulieren <bilder>` runs the solver and shows the 3D view). kittest prefers a software adapter, so the status bar shows e.g. "Microsoft Basic Render Driver" – not the GPU the app uses |
 
 Menu bar (step 7b; `[s]` = disabled, a later task): **Datei** (Neu Strg+N [s], Öffnen… Strg+O,
 Zuletzt geöffnet ›, Hinzufügen › Maßdatei… / Nahtliste…, Speichern Strg+S [s], Speichern unter…
 Strg+Umschalt+S [s], Import › Seamly2D-Muster (.sm2d)… / CLO-Projekt (.zprj)… [s], Export › OBJ… [s] /
 DXF… [s], Informationen…, Beenden Strg+Q) · **Bearbeiten** (Rückgängig Strg+Z [s], Wiederholen
 Strg+Y [s], Alles auswählen Strg+A [s], Auswahl aufheben Esc) · **3D-Kleidung** (Simulation
-starten/anhalten, Einzelschritt, Zurücksetzen, Anordnen, Netzauflösung… - all [s]; Netzprüfung (#46)) ·
+starten/anhalten, Einzelschritt, Zurücksetzen (#56: the first two free when nothing is missing, the
+third needs a run), Anordnen [s], Netzauflösung… [s]; Netzprüfung (#46)) ·
 **2D-Schnitt** (Auslage / Konstruktionslage L, Einpassen F, Nächstes Teil Tab, Vorheriges Teil
 Umschalt+Tab, Nähen › Nahtliste wählen… / Nahtlängen prüfen / Nähte anzeigen Umschalt+S, Nähte
 vorschlagen… (6c)) ·
-**Materialien** (Stoff zuweisen… [s], Stoffbibliothek) · **Avatar** (Körper laden… Strg+Umschalt+A [s],
-Maßdatei wählen…, Avatar anzeigen Umschalt+A [s], Maße am Körper [s]) · **Anzeige** (Blickwinkel ›
-[s], 3D-Kleidung › [s], 2D-Schnitt › Nähte / Längen / Teilnamen / Maßstab / Fadenlauf / Passzeichen (6c), Avatar › [s], Fenster ›
+**Materialien** (Stoff zuweisen… (#56, `.zfab`), Stoffbibliothek) · **Avatar** (Körper laden… (#56,
+`.zprj`), Maßdatei wählen…, Avatar anzeigen Umschalt+A [s], Maße am Körper [s]) · **Anzeige**
+(Blickwinkel › Vorne / Hinten / Links / Rechts / Oben + Einpassen (#56), 3D-Kleidung › Netz (#56) /
+Dehnungskarte [s] / Passformkarte [s] / Abstandskarte [s], 2D-Schnitt › Nähte / Längen / Teilnamen /
+Maßstab / Fadenlauf / Passzeichen (6c), Avatar › [s], Fenster ›
 five areas + Fenster wechseln Strg+Tab, Werkzeugleisten › three toolbars, Anordnung zurücksetzen) ·
 **Einstellungen** (Design › Dunkel / Hell, Sprache › Deutsch / English [s]) · **Hilfe** (Tastenkürzel,
-Über klon3d). Status bar: frames per second, GPU adapter and backend, largest seam deviation, last
-message.
+Über klon3d). Status bar: frames per second, GPU adapter and backend, the simulation (phase, solver
+frames per second, frame number; #56), the 3D camera (`Vorne 2,4 m`; #56), largest seam deviation,
+last message.
 
 ## Steps
 
@@ -436,6 +488,13 @@ message.
       (`.github/pull_request_template.md`: Change / Evidence / Not checked / Limits and provenance),
       `Closes #34`; then on #34: label `review` instead of `in-progress` and a done comment
       (`tools/task.sh done 34 <session> <pr>` does both where `gh` is available)
+- [x] 12. #56 (2026-11-03, branch `56-3d`, one commit per slice): `simulation.rs` (worker thread,
+      channels, the construction of `klon3d-mcp`), `ansicht3d.rs` (wgpu paint callback, orbit camera,
+      wireframe), wiring in `app.rs`/`menue.rs`/`panele.rs`/`dialoge.rs`/`dateiwahl.rs`/`fenster.rs`,
+      tests (`tests/simulation.rs`, `tests/ansicht3d.rs`, updated `tests/oberflaeche.rs` and
+      `tests/fensteranordnung.rs`), `bilder/simulation_3d.png` from `examples/bildschirmfoto.rs
+      --simulieren`, this file. Not here and named in the PR: the solver has no `mit_geraet`, so it
+      runs on the CPU; no OBJ/DXF export and no maps (#57, #58)
 
 ## Environment
 
@@ -466,6 +525,17 @@ crates is safe. A Windows cross check needs about 300 MB in `target/x86_64-pc-wi
 (`rustup +1.99 target add x86_64-pc-windows-msvc` if missing).
 
 **Main machine (Windows):** cargo path as in AGENTS.md; `cargo run --locked -p klon3d-app -- <muster.sm2d>`.
+
+Screenshot of the 3D view without a window (#56), on the main machine:
+
+```pwsh
+cargo run --release -p klon3d-app --example bildschirmfoto -- --simulieren 2 --bild bilder/simulation_3d.png
+```
+
+The example runs the solver through the app's own path (`App::simulation_starten`), waits for the
+requested number of frames and renders the window with kittest's wgpu renderer; release matters, a debug
+frame takes about 15 s instead of 260-350 ms. kittest may pick a software adapter, the 3D callback runs
+on whatever device the harness hands over.
 
 ## Handing over
 

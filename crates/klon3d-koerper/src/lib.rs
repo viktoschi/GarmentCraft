@@ -23,6 +23,7 @@ use std::io::{self, Write};
 use std::path::Path;
 
 pub mod anordnung_clo;
+pub mod anordnung_netz;
 pub mod anpassen;
 pub mod formung;
 pub mod kette;

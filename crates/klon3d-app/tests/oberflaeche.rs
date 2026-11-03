@@ -211,6 +211,8 @@ fn menues_und_gesperrte_eintraege() {
     }
 
     // Every menu and submenu with its enabled and its disabled entries (a pattern is loaded).
+    // Without CLO's body folder the simulation entries are disabled instead (see below).
+    let ohne_koerper = !koerperordner_da();
     type Menue<'a> = (&'a [&'a str], &'a [&'a str], &'a [&'a str]);
     let menues: [Menue; 22] = [
         (
@@ -248,14 +250,12 @@ fn menues_und_gesperrte_eintraege() {
         ),
         (
             &["3D-Kleidung"],
-            &["Netzprüfung"],
             &[
                 "Simulation starten/anhalten",
                 "Einzelschritt",
-                "Zurücksetzen",
-                "Anordnen",
-                "Netzauflösung…",
+                "Netzprüfung",
             ],
+            &["Zurücksetzen", "Anordnen", "Netzauflösung…"],
         ),
         (
             &["2D-Schnitt"],
@@ -278,15 +278,15 @@ fn menues_und_gesperrte_eintraege() {
             ],
             &[],
         ),
-        (&["Materialien"], &["Stoffbibliothek"], &["Stoff zuweisen…"]),
+        (
+            &["Materialien"],
+            &["Stoff zuweisen…", "Stoffbibliothek"],
+            &[],
+        ),
         (
             &["Avatar"],
-            &["Maßdatei wählen…"],
-            &[
-                "Körper laden… Strg+Umschalt+A",
-                "Avatar anzeigen Umschalt+A",
-                "Maße am Körper",
-            ],
+            &["Maßdatei wählen…", "Körper laden…"],
+            &["Avatar anzeigen Umschalt+A", "Maße am Körper"],
         ),
         (
             &["Anzeige"],
@@ -303,14 +303,13 @@ fn menues_und_gesperrte_eintraege() {
         ),
         (
             &["Anzeige", "Blickwinkel"],
-            &[],
             &["Vorne", "Hinten", "Links", "Rechts", "Oben"],
+            &[],
         ),
         (
             &["Anzeige", "3D-Kleidung"],
-            &[],
+            &["Netz"],
             &[
-                "Netz",
                 "Dehnungskarte Alt+7",
                 "Passformkarte Alt+8",
                 "Abstandskarte",
@@ -365,6 +364,21 @@ fn menues_und_gesperrte_eintraege() {
         menue_oeffnen(&mut h, pfad);
         for e in frei {
             let k = im_menue(&h, e);
+            // The simulation needs CLO's body folder; without it (the CI has no CLO
+            // installation) its entries are disabled and name the missing folder.
+            if ohne_koerper && matches!(*e, "Simulation starten/anhalten" | "Einzelschritt") {
+                assert!(
+                    k.accesskit_node().is_disabled(),
+                    "{wo} › {e} frei ohne Körperordner"
+                );
+                k.hover();
+                h.run();
+                let hinweis = h
+                    .query_all_by_role(Role::Tooltip)
+                    .any(|t| t.query_by_label_contains("Körperordner fehlt").is_some());
+                assert!(hinweis, "{wo} › {e}: kein Hinweis auf den Körperordner");
+                continue;
+            }
             assert!(!k.accesskit_node().is_disabled(), "{wo} › {e} gesperrt");
         }
         for e in gesperrt {
@@ -373,13 +387,17 @@ fn menues_und_gesperrte_eintraege() {
                 k.accesskit_node().is_disabled(),
                 "{wo} › {e} nicht gesperrt"
             );
-            // Hovering a disabled entry says why.
+            // Hovering a disabled entry says why: a later task, or that nothing ran yet.
+            let erwartet = match *e {
+                "Zurücksetzen" => "noch keine Simulation gelaufen",
+                _ => SPAETER,
+            };
             k.hover();
             h.run();
             let hinweis = h
                 .query_all_by_role(Role::Tooltip)
-                .any(|t| t.query_by_label(SPAETER).is_some());
-            assert!(hinweis, "{wo} › {e}: kein Hinweis „{SPAETER}“");
+                .any(|t| t.query_by_label(erwartet).is_some());
+            assert!(hinweis, "{wo} › {e}: kein Hinweis „{erwartet}“");
         }
         // Close the menu again: none of its entries is left.
         menue_schliessen(&mut h, pfad[0]);
@@ -771,10 +789,11 @@ fn relativer_pfad_wird_absolut_gespeichert() {
 fn ohne_muster_sind_musterbefehle_gesperrt() {
     let mut h = fenster();
     h.run();
-    let menues: [(&[&str], &[&str]); 5] = [
-        (&["Datei"], &["Informationen…"]),
-        (&["Datei", "Hinzufügen"], &["Maßdatei…", "Nahtliste…"]),
-        (&["Avatar"], &["Maßdatei wählen…"]),
+    // Menu, entries, hover text of the disabled entries (empty: not checked).
+    let menues: [(&[&str], &[&str], &str); 6] = [
+        (&["Datei"], &["Informationen…"], ""),
+        (&["Datei", "Hinzufügen"], &["Maßdatei…", "Nahtliste…"], ""),
+        (&["Avatar"], &["Maßdatei wählen…"], ""),
         (
             &["2D-Schnitt"],
             &[
@@ -782,13 +801,22 @@ fn ohne_muster_sind_musterbefehle_gesperrt() {
                 "Nächstes Teil Tab",
                 "Vorheriges Teil Umschalt+Tab",
             ],
+            "",
         ),
         (
             &["2D-Schnitt", "Nähen"],
             &["Nahtliste wählen…", "Nahtlängen prüfen"],
+            "",
+        ),
+        (
+            &["3D-Kleidung"],
+            &["Simulation starten/anhalten", "Einzelschritt"],
+            "Erst ein Muster öffnen",
         ),
     ];
-    for (pfad, eintraege) in menues {
+    h.ctx
+        .global_style_mut(|s| s.interaction.tooltip_delay = 0.0);
+    for (pfad, eintraege, hinweis) in menues {
         menue_oeffnen(&mut h, pfad);
         for e in eintraege {
             let k = im_menue(&h, e);
@@ -797,6 +825,14 @@ fn ohne_muster_sind_musterbefehle_gesperrt() {
                 "{} › {e} frei",
                 pfad.join(" › ")
             );
+            if !hinweis.is_empty() {
+                k.hover();
+                h.run();
+                let da = h
+                    .query_all_by_role(Role::Tooltip)
+                    .any(|t| t.query_by_label(hinweis).is_some());
+                assert!(da, "{} › {e}: kein Hinweis „{hinweis}“", pfad.join(" › "));
+            }
         }
         menue_schliessen(&mut h, pfad[0]);
     }
