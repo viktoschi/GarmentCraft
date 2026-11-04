@@ -15,7 +15,8 @@
 //! klon3d zprj   <projekt.zprj> [--teile] [--naehte] [--stoffe] [--netz]
 //!                [--obj <datei.obj>] [--koerper-obj <datei.obj>]
 //! klon3d anziehen <muster.sm2d> [--masse <datei.smis>] [--naehte <datei>] [--lage <datei>] [--naehen <m/s>]
-//!                [--naehbilder <n>] [--einschwingen-max <n>] [--ohne-koerperpunkte] [--material radical|retifist]
+//!                [--naehbilder <n>] [--einschwingen-max <n>] [--ohne-koerperpunkte]
+//!                [--material <profil|datei.zfab|stamm>]
 //!                [--obj <ordner>] [--ordner <Resizing>]
 //! ```
 //!
@@ -131,13 +132,15 @@ fn hilfe() {
   klon3d anziehen <muster.sm2d> [--masse <datei.smis>] [--naehte <datei>]
                   [--lage <datei>] [--naehen <m/s>] [--naehbilder <n>]
                   [--einschwingen-max <n>] [--ohne-koerperpunkte]
-                  [--material radical|retifist] [--obj <ordner>] [--ordner <Resizing>]
+                  [--material <profil|datei.zfab|stamm>] [--obj <ordner>] [--ordner <Resizing>]
       legt die Teile nach der Lagedatei (<muster>.lage) um den Koerper der
       Massdatei (Vorgabe: die des Musters) und zieht sie an (Stufe 4c): die
       Naehte schliessen sich mit begrenzter Geschwindigkeit (Vorgabe 0,1 m/s
       ueber 200 Bilder), dabei sticht kein Koerperpunkt durch den Stoff; dann
       250 Bilder Ruhe, mit Schwerkraft; meldet die Nahtabstaende je Naht;
-      --obj schreibt koerper.obj, anfang.obj und ende.obj (mm)
+      --material nimmt ein eingebautes Profil (radical, retifist), einen Pfad
+      auf eine .zfab, oder den Stamm eines Stoffs aus assets/stoffe (Vorgabe:
+      0,4 mm Radical); --obj schreibt koerper.obj, anfang.obj und ende.obj (mm)
 
   klon3d vergleich <a.obj> <b.obj> [--zelle <mm>] [--csv <datei>] [--farben <ordner>]
       stellt zwei Netze gegeneinander (Stufe 5): Abstand jedes Knotens zur
