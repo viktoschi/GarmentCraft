@@ -32,6 +32,7 @@
 //! [`klon3d_koerper::koerper`]) und schreibt die Gruppe `body` in mm.
 
 mod anziehen;
+mod stoffwahl;
 mod umriss;
 
 use std::collections::BTreeMap;
@@ -787,14 +788,25 @@ fn befehl_netz(args: &[String]) -> ExitCode {
 
 // ─────────────────────────────────────────────────────────── roehre ──
 
-fn befehl_roehre(args: &[String]) -> ExitCode {
-    use klon3d_sim::roehre::{bis_zur_ruhe, param_ruhe, Roehre};
-    use klon3d_sim::{ausgabe, CpuReferenz, Material};
+const ROEHRE_AUFRUF: &str = "Aufruf: klon3d roehre [--material <profil|datei.zfab|stamm>] [--reduktion <%>] \
+                             [--kante <mm>] [--spalt] [--rutsch <s>] [--obj <datei.obj>] [--gpu]";
 
-    const AUFRUF: &str = "Aufruf: klon3d roehre [--material radical|retifist] [--reduktion <%>] \
-                          [--kante <mm>] [--spalt] [--rutsch <s>] [--obj <datei.obj>] [--gpu]";
-    let mut r = Roehre::default();
-    // Step 4b: the implicit step on the GPU instead of the XPBD reference.
+/// Die ausgewerteten Optionen von `roehre`, ohne dass etwas gerechnet wurde.
+#[derive(Debug)]
+struct RoehreAufruf {
+    r: klon3d_sim::roehre::Roehre,
+    /// Step 4b: the implicit step on the GPU instead of the XPBD reference.
+    gpu: bool,
+    rutsch: Option<f64>,
+    obj: Option<PathBuf>,
+}
+
+/// Reads `roehre`'s options. Separate from the run so that `--material` can be
+/// checked without twelve minutes of solver: `anziehen` and the tube resolve a
+/// fabric through the same [`crate::stoffwahl::stoff_waehlen`], and this is the
+/// place where the tube could silently fall back to 0.4 mm again.
+fn roehre_optionen(args: &[String]) -> Result<RoehreAufruf, String> {
+    let mut r = klon3d_sim::roehre::Roehre::default();
     let mut gpu = false;
     let mut rutsch: Option<f64> = None;
     let mut obj: Option<PathBuf> = None;
@@ -805,7 +817,12 @@ fn befehl_roehre(args: &[String]) -> ExitCode {
         // Schalter ohne Wert rücken um 1 vor, Optionen mit Wert um 2.
         let mut schritt = 2;
         let ok = match args[i].as_str() {
-            "--material" => wert.and_then(Material::nach_namen).map(|m| r.material = m).is_some(),
+            // Ein unbekannter Name ist ein Fehler, keine stille 0,4-mm-Röhre.
+            "--material" => {
+                let Some(w) = wert else { return Err(format!("--material ohne Wert\n{ROEHRE_AUFRUF}")) };
+                r.material = crate::stoffwahl::stoff_waehlen(w)?;
+                true
+            }
             "--reduktion" => wert.and_then(zahl).filter(|v| (0.0..90.0).contains(v)).map(|v| r.reduktion = v / 100.0).is_some(),
             "--kante" => wert.and_then(zahl).filter(|v| *v >= 2.0).map(|v| r.kante_mm = v).is_some(),
             "--rutsch" => wert.and_then(zahl).filter(|v| *v > 0.0).map(|v| rutsch = Some(v)).is_some(),
@@ -823,11 +840,24 @@ fn befehl_roehre(args: &[String]) -> ExitCode {
             _ => false,
         };
         if !ok {
-            eprintln!("unbekannte oder unvollständige Option {:?}\n{AUFRUF}", args[i]);
-            return ExitCode::FAILURE;
+            return Err(format!("unbekannte oder unvollständige Option {:?}\n{ROEHRE_AUFRUF}", args[i]));
         }
         i += schritt;
     }
+    Ok(RoehreAufruf { r, gpu, rutsch, obj })
+}
+
+fn befehl_roehre(args: &[String]) -> ExitCode {
+    use klon3d_sim::roehre::{bis_zur_ruhe, param_ruhe};
+    use klon3d_sim::{ausgabe, CpuReferenz};
+
+    let RoehreAufruf { r, gpu, rutsch, obj } = match roehre_optionen(args) {
+        Ok(a) => a,
+        Err(e) => {
+            eprintln!("{e}");
+            return ExitCode::FAILURE;
+        }
+    };
 
     let mut s = match r.szene(param_ruhe()) {
         Ok(s) => s,
@@ -837,11 +867,12 @@ fn befehl_roehre(args: &[String]) -> ExitCode {
         }
     };
     println!(
-        "Röhre {} × {} mm um Zylinder R {} mm, {}, Reduktion {:.1} %{}",
+        "Röhre {} × {} mm um Zylinder R {} mm, {} ({} mm), Reduktion {:.1} %{}",
         (r.breite_m() * 1e3).round(),
         (r.hoehe_m * 1e3).round(),
         r.zylinder_radius_m * 1e3,
         r.material.name,
+        crate::stoffwahl::dicke_gedruckt(r.material.dicke_m),
         r.reduktion * 100.0,
         if r.anfang_mit_spalt { ", Beginn mit offenem Nahtspalt" } else { "" }
     );
@@ -2280,4 +2311,82 @@ fn befehl_vergleich(args: &[String]) -> ExitCode {
         );
     }
     ExitCode::SUCCESS
+}
+
+#[cfg(test)]
+mod tests {
+    //! Nur die Optionsauswertung: die Roehre selbst rechnet zwoelf Minuten, und
+    //! was hier geprueft wird, ist, dass `--material` ueberhaupt bis zum Stoff
+    //! kommt - der Rueckfall auf 0,4 mm war der Fehler aus #87.
+
+    use super::*;
+
+    fn args(liste: &[&str]) -> Vec<String> {
+        liste.iter().map(|s| (*s).to_string()).collect()
+    }
+
+    /// The eight files as `klon3d-pipeline`'s own test names them.
+    fn stoffordner() -> PathBuf {
+        PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../assets/stoffe")
+    }
+
+    /// A path to a fabric arrives at the tube as that fabric - thickness
+    /// included, which is the whole point of comparing a material against the
+    /// arithmetic it came from.
+    #[test]
+    fn roehre_nimmt_eine_stoffdatei() {
+        let p = stoffordner().join("Latex_Laminat_2x1.0mm_abgeleitet.zfab");
+        let a = roehre_optionen(&args(&["--material", &p.display().to_string()])).unwrap();
+        assert_eq!(a.r.material.name, "Latex_Laminat_2x1.0mm_abgeleitet");
+        assert!((a.r.material.dicke_m * 1e3 - 2.0).abs() < 0.01, "Dicke {} mm", a.r.material.dicke_m * 1e3);
+    }
+
+    /// The same by stem, through the folder search - the case that needs
+    /// `assets/stoffe` and therefore failed silently before #87.
+    #[test]
+    fn roehre_nimmt_einen_stamm() {
+        let a = roehre_optionen(&args(&["--material", "Latex_1.0mm_abgeleitet"])).unwrap();
+        assert_eq!(a.r.material.name, "Latex_1.0mm_abgeleitet");
+        assert!((a.r.material.dicke_m * 1e3 - 1.0).abs() < 0.01, "Dicke {} mm", a.r.material.dicke_m * 1e3);
+    }
+
+    /// The built-in profiles stay, and so does the default without `--material`.
+    #[test]
+    fn roehre_ohne_material_bleibt_bei_radical() {
+        let a = roehre_optionen(&[]).unwrap();
+        assert_eq!(a.r.material.name, klon3d_sim::RADICAL_RUBBER_04.name);
+        let a = roehre_optionen(&args(&["--material", "retifist"])).unwrap();
+        assert_eq!(a.r.material.name, klon3d_sim::Material::nach_namen("retifist").unwrap().name);
+    }
+
+    /// An unknown name is an error that names the fabrics folder or the
+    /// profiles, not a run at 0.4 mm. Before #87 the tube answered `false` here
+    /// and stopped with the generic "unknown option".
+    #[test]
+    fn roehre_lehnt_unbekannten_stoff_ab() {
+        let e = roehre_optionen(&args(&["--material", "Latex_0.5mm"])).unwrap_err();
+        assert!(e.contains("Latex_0.5mm"), "{e}");
+        assert!(e.contains("assets/stoffe") || e.contains("radical"), "die Meldung nennt keine Quelle: {e}");
+    }
+
+    /// A missing value is not silently the default either.
+    #[test]
+    fn roehre_lehnt_material_ohne_wert_ab() {
+        let e = roehre_optionen(&args(&["--material"])).unwrap_err();
+        assert!(e.contains("--material"), "{e}");
+    }
+
+    /// The other options still parse, so splitting the reader did not break the
+    /// command.
+    #[test]
+    fn roehre_optionen_bleiben() {
+        let a = roehre_optionen(&args(&["--reduktion", "5,5", "--kante", "20", "--spalt", "--rutsch", "0,5"])).unwrap();
+        assert!((a.r.reduktion - 0.055).abs() < 1e-12);
+        assert!((a.r.kante_mm - 20.0).abs() < 1e-12);
+        assert!(a.r.anfang_mit_spalt);
+        assert_eq!(a.rutsch, Some(0.5));
+        // An out-of-range value is refused, as before.
+        assert!(roehre_optionen(&args(&["--reduktion", "95"])).is_err());
+        assert!(roehre_optionen(&args(&["--kante", "1"])).is_err());
+    }
 }

@@ -62,7 +62,7 @@ klon3d umriss    <pattern.sm2d> [--svg <file>]      piece outlines (seam line, p
 klon3d dxf       <pattern.sm2d> <out.dxf>           AAMA DXF export (edge = seam line, allowance contour on layer 8)
 klon3d naehte    <pattern.sm2d> [--liste <file>]    check seam edges and the seam list
 klon3d netz      <pattern.sm2d> [--obj <file>]      triangle meshes and seam point pairs
-klon3d roehre    [--material radical|retifist]      solver tube test
+klon3d roehre    [--material <profil|datei.zfab|stamm>]   solver tube test
 klon3d koerper   <measurements.smis> [--out <obj>] [--wie-clo]
                                                     shape a body from measurements (--wie-clo:
                                                     exactly as the reference program shapes it)
