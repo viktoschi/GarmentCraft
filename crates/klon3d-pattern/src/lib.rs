@@ -38,6 +38,7 @@ pub mod schneiden;
 pub mod model;
 pub mod operationen;
 pub mod naehte;
+pub mod nahtzugabe;
 pub mod parse;
 pub mod property;
 pub mod smis;
