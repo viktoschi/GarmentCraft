@@ -1,9 +1,9 @@
 # klon3d-app – application window (stage 6)
 
-Task: [#34](https://github.com/viktoschi/klon3d/issues/34) · claimed by `claude-app-1101` ·
+Task: [#34](https://github.com/viktoschi/GarmentCraft/issues/34) · claimed by `claude-app-1101` ·
 branch `claude/vigilant-babbage-idsu9r` · base `ec76e25` ·
-since 2026-11-03 [#56](https://github.com/viktoschi/klon3d/issues/56) on branch `56-3d`, base `e4dffb8` ·
-since 2026-11-03 [#58](https://github.com/viktoschi/klon3d/issues/58) on branch `58-karten`, base `95ff1e5`
+since 2026-11-03 [#56](https://github.com/viktoschi/GarmentCraft/issues/56) on branch `56-3d`, base `e4dffb8` ·
+since 2026-11-03 [#58](https://github.com/viktoschi/GarmentCraft/issues/58) on branch `58-karten`, base `95ff1e5`
 
 This file is the **handoff**: it says what is decided, what is done and which steps remain, so that any
 session – Claude, another agent or a human – can continue without the chat history. Tick a step when it is
@@ -11,7 +11,7 @@ done and committed; update "Status" at the top when you stop.
 
 ## Status
 
-**2026-11-03 – inspection maps in the 3D view, [#58](https://github.com/viktoschi/klon3d/issues/58)**
+**2026-11-03 – inspection maps in the 3D view, [#58](https://github.com/viktoschi/GarmentCraft/issues/58)**
 (branch `58-karten`, base `95ff1e5`): strain, fit and distance are now painted onto the garment in the
 3D window, with a legend, and `examples/bildschirmfoto.rs --karte` renders any of them headless. New
 module `src/karten.rs`; wired into `ansicht3d.rs` (vertex colours, legend, hover value), `simulation.rs`
@@ -55,7 +55,7 @@ module `src/karten.rs`; wired into `ansicht3d.rs` (vertex colours, legend, hover
   `cargo test -p klon3d-app`: 124 tests, 0 failed, 4 ignored. `cargo test --locked --workspace
   --exclude klon3d-view --no-fail-fast`: 483 passed, 0 failed, 44 ignored.
 
-**2026-11-03 - 3D view and simulation, [#56](https://github.com/viktoschi/klon3d/issues/56)** (branch
+**2026-11-03 - 3D view and simulation, [#56](https://github.com/viktoschi/GarmentCraft/issues/56)** (branch
 `56-3d`, base `e4dffb8`): the 3D window now draws the body and the cloth, and the solver runs from the
 window. Two new modules carry it: `src/ansicht3d.rs` (the view) and `src/simulation.rs` (the worker).
 Both are wired into `app.rs` (state, `Aktion`s, `vorgaben`, `gpu_erfassen`, end of frame), `menue.rs`
@@ -98,7 +98,7 @@ Both are wired into `app.rs` (state, `Aktion`s, `vorgaben`, `gpu_erfassen`, end 
   `examples/bildschirmfoto.rs --simulieren <bilder>` renders the 3D view to `bilder/simulation_3d.png`
   without a window (see "Environment").
 
-**2026-11-02 - mesh check, [#46](https://github.com/viktoschi/klon3d/issues/46)** (branch
+**2026-11-02 - mesh check, [#46](https://github.com/viktoschi/GarmentCraft/issues/46)** (branch
 `46-mesh-check`, base `4b1d229`): 3D-Kleidung > "Netzprüfung" is enabled with a pattern (without
 one disabled with the hover text "erst ein Muster öffnen"). It meshes the pattern shown through
 `klon3d_pipeline::Muster::netz` with the seam list in use (none: only the meshes; a broken list:
@@ -118,7 +118,7 @@ crept away from under the first click (asserted in the test). Tests: unit tests
 `tests/netzpruefung.rs` (disabled with hover text, report numbers against an independent
 `vernetze` + `pruefe`, closing).
 
-**2026-11-02 - stage 6c, items 1-3 of [#40](https://github.com/viktoschi/klon3d/issues/40)**
+**2026-11-02 - stage 6c, items 1-3 of [#40](https://github.com/viktoschi/GarmentCraft/issues/40)**
 (branch `40-grainline`, base `bfe4a58`): grainlines and notches in the 2D view, 2D-Schnitt >
 "Nähte vorschlagen…" with a save mode of the file dialog. Item 4 (Netzprüfung) is not part of it
 and stays greyed out (it moves after #38). `cargo test --locked -p klon3d-app` on Windows: 95

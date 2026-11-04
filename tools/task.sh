@@ -9,7 +9,7 @@
 # comments: the first "Claimed" since the last release by the owner wins.
 set -euo pipefail
 
-REPO="${KLON3D_REPO:-viktoschi/klon3d}"
+REPO="${KLON3D_REPO:-viktoschi/GarmentCraft}"
 
 usage() {
   cat <<'EOF'

@@ -4,7 +4,7 @@ Humans and agents follow the same rules. What applies to the content is in [AGEN
 describes the **workflow** – how tasks are handed out so that several agents can work at the same time
 without overwriting each other's files.
 
-`main` on GitHub (`viktoschi/klon3d`) is the shared state. Nobody pushes to `main` directly; every change
+`main` on GitHub (`viktoschi/GarmentCraft`) is the shared state. Nobody pushes to `main` directly; every change
 arrives as a pull request and is merged by viktoschi.
 
 ## In short
@@ -42,7 +42,7 @@ scope. Small is better: two tasks with separate files beat one that reserves hal
 web form:
 
 ```sh
-gh issue create -R viktoschi/klon3d --label task,ready --title "[Task] …" --body-file task.md
+gh issue create -R viktoschi/GarmentCraft --label task,ready --title "[Task] …" --body-file task.md
 ```
 
 `task.md` needs the same sections as the template – `task.sh` reads the scope from `### Files`:
@@ -139,7 +139,7 @@ taken over silently.
 
 ## A prompt for a new agent
 
-> Read AGENTS.md and CONTRIBUTING.md in viktoschi/klon3d. Use `tools/task.sh list` to find a free task that
+> Read AGENTS.md and CONTRIBUTING.md in viktoschi/GarmentCraft. Use `tools/task.sh list` to find a free task that
 > fits this session and claim it with `tools/task.sh claim <nr> <session>`. You may post claim, progress and
 > handoff comments on that issue. Work in your own worktree on the branch `<nr>-<keyword>`, change only files
 > from the scope and open a pull request listing the checks that actually ran. Ask me before widening the
