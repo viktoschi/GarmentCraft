@@ -98,7 +98,7 @@ Formula engine: lexer, recursive descent, QMuParser dialect, 9 tests green.
 | L036 (third-party, mm) | the only pattern with `trueDarts`, `cubicBezier`, `cubicBezierPath` and formulas on axis sub-curves; checked with a synthetic body against Seamly2D's export (`tests/l036_seamly.rs`, skips without the pattern) | **#42, finding 123**: all 204 named points within 7e-5 mm of Seamly2D (probe pieces, one per point), 4 of 5 seam lines ≤ 0.08 mm. **Since #49 all five** within 0.001 mm in both directions: the seam line is cleaned like Seamly2D's `mainPathPoints` (`schleifen.rs`: near duplicates, spikes and loops out; the centre back of "L036 - back" overlaps itself, 2294.16 instead of 2727.4 mm). Node points keep their place, and nodes inside a removed loop drop out of the edges |
 | Seam line cleanup | `schleifen.rs`, called from `kontur.rs`; points of point nodes are fixed, a node in a removed loop is dropped from the boundary edges (`kanten.rs`) instead of leaving an edge of length zero | **#49**: synthetic cases (backtracking run, figure eight, spike, near duplicates, fixed points, a piece with loop nodes); Bolero v37 and stocking v26 still match Seamly2D's export; workspace tests green |
 | `idObject` resolution | piece nodes → outline paths | piece outlines close |
-| Seam allowance | `seamAllowance` bool, `width` as a formula, `<CSA>` | width computable |
+| Seam allowance | `seamAllowance` bool, `width` as a formula, `<CSA>` | width computable, but it is a **run along the edge**, not one value - arithmetic built (`nahtzugabe.rs`, #70), not wired (findings 132, 133, see Stage 3) |
 
 **Acceptance criterion:** the piece outlines of 10 patterns match `schnitt.py
 piece_outline`.
@@ -280,6 +280,7 @@ new modelling, and CLO's own field set has no columns for the arcs either.
 | Part | Content | Status |
 |---|---|---|
 | **Boundary edges** | seam line per piece split at the point nodes, length, notches, seam allowance per edge (`kanten.rs`) | **done** (finding 32) |
+| **Seam allowance contour** | the allowance is not one width per piece: the seam line is offset **point by point** by the allowance, with a run along the edge - no offset polygon, no self-intersection clean-up (`kanten.rs` keeps only `before`/`after` per node) | **arithmetic built** (`nahtzugabe.rs`, #70), **not wired** - who calls it is open (findings 132, 133) |
 | **Seam assignment** | seam list `<pattern>.naehte` next to the pattern: sides made of whole boundary edges, 1:1 up to M:N; `klon3d naehte` checks lengths, notches, coverage (`naehte.rs`) | **done** (finding 32); **seam suggestion** `klon3d naehte --vorschlag` (finding 101): Bluse3, Bluse1, bustier and skirt edge for edge like the hand-written list, direction and mirroring from the seam graph; open: pleats (bolero), slits |
 | **Triangulation** | seam line → triangle mesh per piece, approx. 10 mm edge length: boundary split by curvature, ear clipping, Lawson, Ruppert with a minimum angle of 25°, smoothing; exact on an integer grid (`klon3d-mesh`) | **done** (finding 33) |
 | **Subdivision** | subdivide both seam partners equally by **length fraction** as in CLO (§4 of the specification), point nodes of both sides merged up to 2 mm; result: point pairs per sub-seam; `klon3d netz` | **done** (finding 33) |
@@ -347,6 +348,50 @@ Style3D's solver; the form of the rule carries over, the numbers do not.
 **Still missing:** seam springs on the point pairs, partial stretches of an edge
 (CLO's Free Sewing), internal shapes (holes, internal lines) and
 darts as seam sides, an automatic seam list as a suggestion.
+
+**How the reference computes the seam allowance** (findings 132, 133) - read;
+the arithmetic is rebuilt in `crates/klon3d-pattern/src/nahtzugabe.rs` (#70,
+PR #72 - in review while this is written), and nothing calls it yet. The
+allowance is a **run along the arc length**, not a constant:
+
+```
+S   = Σ |P_k − P_{k−1}|          polyline length, without the offset
+s_k                              cumulative length up to point k
+o_k = a + (b − a) · (s_k / S)    linear, no magnitude, no sign
+```
+
+The run is **linear, not absolute**: the earlier reading `a ± |b − a| · (s_k/S)`
+with the sign taken from `|b| > |a|` was wrong and is withdrawn. The reference does
+compare the magnitudes and picks one of two branches, but both come out as
+`a + t·(b−a)`: one branch adds `t·(b−a)`, the other subtracts `t·(a−b)` - the same
+value. The sign question therefore decides *which* branch runs, not *what* comes
+out (finding 132, §4.3).
+
+At least **four edges**, otherwise nothing is computed. At the ends the two
+neighbouring lines are averaged with the factor **0.5**, crossed: the start takes
+its own width with the neighbour's inner width, the end the other way round. The
+contour itself is a **per-point displacement**, not an offset polygon - the
+point's **stored direction** times the width, `new = point + direction × width`,
+two point objects per edge. At the two ends of the run one extra step applies: if the displaced
+point lies on the line of the neighbouring edge, it is pushed one more allowance
+along that neighbour's stored direction - the neighbour of the first edge for the
+first point, of the last edge for the last. Where the stored direction points is
+not settled by the findings; that it is the outward normal is the assumption a
+contour needs, not a result.
+
+Two markers sit on the run: the first is a **one-shot gate** (`0` returns at once,
+`1` computes once and clears itself), the second means *the run is computed* (set by
+the distributor, read by the contour and by the length check). Both live in the
+seam line's **common entry point**, which five line classes share - a class of its
+own does not exist, and none of the four candidate classes reaches the contour.
+
+**In klon3d the arithmetic exists, the wiring does not.** `nahtzugabe.rs` has the
+run (`verlauf`), the crossed 0.5 averaging (`startwert`/`endwert`) and the contour
+(`kontur`), 15 tests with the numbers of the findings. `kanten.rs` is untouched and
+still holds two values per point node (`before`/`after`); it reports edges that
+carry an allowance without a seam. Missing: who calls the module (the two markers
+and the line-class dispatch have no counterpart), and how a piece hands its edges
+to it.
 
 **Meshes in the viewer:** `klon3d netz --svg` draws meshes and
 seam points, `--obj` writes them; `klon3d-fenster` does not show them yet.
