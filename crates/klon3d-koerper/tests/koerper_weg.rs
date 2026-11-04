@@ -1,16 +1,17 @@
 //! The entry point of `klon3d.exe`: body from `.smis`, chain or fallback.
 //!
 //! Mesh and data: CLO's resizing folder (`CLO_FEMALE` selects another one; the
-//! default is the reference folder). Without it the tests are skipped.
+//! default is the reference folder). Without it the CLO paths are skipped.
 //!
-//! Three paths are checked: the reference chain (default folder), the older chain
-//! (only when the older folder exists – backup) and the old `anpassen` path from a
-//! folder holding only the older `Advanced` files.
+//! Four paths are checked: the reference chain (default folder), the older chain
+//! (only when the older folder exists – backup), the old `anpassen` path from a
+//! folder holding only the older `Advanced` files, and the MakeHuman path, which
+//! needs no CLO file at all and therefore always runs.
 
 use std::path::PathBuf;
 
 use klon3d_koerper::kette::KOERPER;
-use klon3d_koerper::koerper::{aus_smis, ordner, Weg};
+use klon3d_koerper::koerper::{aus_smis, makehuman_weg, ordner, Weg};
 
 /// CLO's older resizing folder of the default installation.
 const ORDNER_ALT: &str = r"C:\Program Files\CLO Standalone\Preset\Avatar\Resizing\Female";
@@ -100,4 +101,46 @@ fn fallback_ohne_kettendaten() {
     );
     assert!(k.kette.is_none());
     pruefe_netz(&k);
+}
+
+/// The MakeHuman path needs no CLO file: it runs everywhere, on the shipped
+/// CC0 mesh. It must hold the four shape lines of the `.smis` file.
+#[test]
+fn makehuman_weg_ohne_clo_daten() {
+    let pfad = PathBuf::from(concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/../klon3d-pattern/tests/muster/hexen_2026_10_27/measurements.smis"
+    ));
+    let Ok(smis) = klon3d_pattern::lies_smis(&pfad) else {
+        eprintln!("übersprungen: {} fehlt", pfad.display());
+        return;
+    };
+    let Some(o) = klon3d_koerper::koerper_quelle::ordner() else {
+        eprintln!("übersprungen: MakeHuman-Assets fehlen");
+        return;
+    };
+
+    let k = makehuman_weg(&o, &|n| smis.wert(n)).expect("MakeHuman-Körper");
+    assert_eq!(k.weg, Weg::Makehuman, "{:?}", k.meldungen);
+    assert!(k.kette.is_none());
+
+    // 13 380 Punkte der Gruppe `body` plus die Ringe und Ecken, die `formen`
+    // einfügt - nach oben offen, aber nicht beliebig gross.
+    let n = k.netz.punkte.len();
+    assert!((13_000..40_000).contains(&n), "{n} Punkte");
+    assert!(!k.netz.dreiecke.is_empty());
+    assert!(k.netz.dreiecke.iter().all(|d| d.iter().all(|&i| i < n)));
+    let (lo, hi) = k.netz.hoehe().unwrap();
+    assert!((1550.0..1650.0).contains(&(hi - lo)), "Höhe {} mm", hi - lo);
+
+    // Die Formlinien selbst prüft `abnahme_formziele.rs` gegen alle sechs
+    // Werte; hier zählt, dass der Weg sie überhaupt geformt hat und dass die
+    // Meldungen jede Linie nennen.
+    for name in ["Brust", "Taille", "HighHip", "Hüfte"] {
+        assert!(
+            k.meldungen.iter().any(|m| m.starts_with(name)),
+            "{name} fehlt in {:?}",
+            k.meldungen
+        );
+    }
 }

@@ -25,16 +25,19 @@ use std::path::Path;
 pub mod anordnung_clo;
 pub mod anordnung_netz;
 pub mod anpassen;
+pub mod bogenmasse;
 pub mod formung;
 pub mod kette;
 pub mod kette_referenz;
 pub mod koerper;
+pub mod koerper_quelle;
 pub mod massband;
 pub mod messung;
 pub mod messung_referenz;
 pub mod nachformung;
 pub mod nacharbeit_referenz;
 pub mod person;
+pub mod ringecken;
 pub mod silhouette;
 pub mod spur;
 
@@ -281,7 +284,11 @@ pub fn rumpf(netz: &Netz, y: f64) -> Option<Querschnitt> {
     }
 
     let mut benutzt = vec![false; stuecke.len()];
+    // Zwei Arten von Rumpfring, zwei Kandidaten: der Ring um die Körperachse
+    // (Ursprung der Ebene) und - wenn es keinen gibt - der Ring um den eigenen
+    // Flächenschwerpunkt. Siehe [`rumpf_ring`].
     let mut best: Option<(f64, Vec<(f64, f64)>)> = None;
+    let mut best_mitte: Option<(f64, Vec<(f64, f64)>)> = None;
 
     for start in 0..stuecke.len() {
         if benutzt[start] {
@@ -345,33 +352,93 @@ pub fn rumpf(netz: &Netz, y: f64) -> Option<Querschnitt> {
             }
         }
 
-        if !umschliesst(&punkte) {
+        if !umschliesst(&punkte, (0.0, 0.0)) {
+            // Zweiter Kandidat: derselbe Ring um den eigenen Schwerpunkt.
+            // Bei MakeHuman liegt das Becken hinter `z = 0` (der Körper ist
+            // über den Mittelwert aller Punkte zentriert, nicht über das
+            // Becken), bei 77 cm liegt der Ursprung sogar **vor** dem Körper:
+            // vorderster Punkt z = +1,58 gegen eine Beckenmitte bei z = −99.
+            // Der Ring ist trotzdem ein sauberer Rumpfquerschnitt - gemessen
+            // wird auf seiner Hülle, und die liegt um den eigenen Schwerpunkt.
+            // Ohne diesen Kandidaten ist die Hüfte unter 83 cm nicht messbar,
+            // obwohl der Schnitt dort einwandfrei ist.
+            //
+            // Die Körpermitte in `x` ist dagegen bekannt und steht nicht zur
+            // Debatte: der Körper ist spiegelsymmetrisch aufgebaut. Der Ring
+            // muss also die Achse `x = 0` in seiner eigenen Tiefe umschliessen.
+            // Das ist die Bedingung, die einen Oberschenkel aussortiert - er
+            // liegt ganz auf einer Seite und umschliesst `x = 0` nie.
+            let m = flaechen_mitte(&punkte);
+            if umschliesst(&punkte, (0.0, m.1)) && umschliesst(&punkte, m) {
+                let laenge = ringlaenge(&punkte);
+                if best_mitte.as_ref().is_none_or(|(l, _)| laenge > *l) {
+                    best_mitte = Some((laenge, punkte));
+                }
+            }
             continue;
         }
 
-        let laenge: f64 = punkte
-            .iter()
-            .zip(punkte.iter().cycle().skip(1))
-            .map(|(p, q)| ((q.0 - p.0).powi(2) + (q.1 - p.1).powi(2)).sqrt())
-            .sum();
+        let laenge = ringlaenge(&punkte);
 
         if best.as_ref().is_none_or(|(l, _)| laenge > *l) {
             best = Some((laenge, punkte));
         }
     }
 
-    best.map(|(laenge, ring)| Querschnitt { laenge, ring, hoehe: y })
+    best.or(best_mitte)
+        .map(|(laenge, ring)| Querschnitt { laenge, ring, hoehe: y })
 }
 
-/// Liegt der Ursprung der Ebene im Inneren des Rings?
+/// Länge der geschlossenen Kette, letzter Punkt zum ersten.
+fn ringlaenge(ring: &[(f64, f64)]) -> f64 {
+    ring.iter()
+        .zip(ring.iter().cycle().skip(1))
+        .map(|(p, q)| ((q.0 - p.0).powi(2) + (q.1 - p.1).powi(2)).sqrt())
+        .sum()
+}
+
+/// Flächenschwerpunkt einer geschlossenen Punktfolge (x, z), in derselben
+/// Einheit wie die Punkte.
 ///
-/// Strahl von `(0, 0)` nach `+x`, nach jedem Schnitt mit einem Randstück
+/// Bei einem entarteten Ring (Fläche null) die Mitte der Bounding-Box: dann
+/// ist ohnehin nichts zu messen, aber der Rückfall auf `(0, 0)` würde einen
+/// Ring, der gar nicht um den Ursprung liegt, stillschweigend verwerfen.
+fn flaechen_mitte(ring: &[(f64, f64)]) -> (f64, f64) {
+    let mut a = 0.0;
+    let mut cx = 0.0;
+    let mut cz = 0.0;
+    for i in 0..ring.len() {
+        let p = ring[i];
+        let q = ring[(i + 1) % ring.len()];
+        let k = p.0 * q.1 - q.0 * p.1;
+        a += k;
+        cx += (p.0 + q.0) * k;
+        cz += (p.1 + q.1) * k;
+    }
+    if a.abs() > 1.0e-12 * ring.len() as f64 {
+        return (cx / (3.0 * a), cz / (3.0 * a));
+    }
+    let mut lo = ring[0];
+    let mut hi = ring[0];
+    for p in ring {
+        lo = (lo.0.min(p.0), lo.1.min(p.1));
+        hi = (hi.0.max(p.0), hi.1.max(p.1));
+    }
+    (0.5 * (lo.0 + hi.0), 0.5 * (lo.1 + hi.1))
+}
+
+/// Liegt `punkt` im Inneren des Rings?
+///
+/// Strahl von `punkt` nach `+x`, nach jedem Schnitt mit einem Randstück
 /// einmal zählen; ungerade heisst innen.
-fn umschliesst(ring: &[(f64, f64)]) -> bool {
+fn umschliesst(ring: &[(f64, f64)], punkt: (f64, f64)) -> bool {
     let mut kreuzungen = 0;
     for i in 0..ring.len() {
-        let (x1, z1) = ring[i];
-        let (x2, z2) = ring[(i + 1) % ring.len()];
+        let (x1, z1) = (ring[i].0 - punkt.0, ring[i].1 - punkt.1);
+        let (x2, z2) = (
+            ring[(i + 1) % ring.len()].0 - punkt.0,
+            ring[(i + 1) % ring.len()].1 - punkt.1,
+        );
         if (z1 > 0.0) != (z2 > 0.0) {
             let t = -z1 / (z2 - z1);
             if x1 + t * (x2 - x1) > 0.0 {

@@ -119,7 +119,7 @@ fn messe(name: &str, netz: &Netz, d: &Messdaten, ziel: (f64, f64, f64)) -> Beric
     }
 }
 
-fn zeige(name: &str, e: &Ergebnis, namen: &[&str]) {
+fn zeige(name: &str, e: &Ergebnis, namen: &[String]) {
     println!(
         "{name}: {} Runden{}, Restfehler {}",
         e.runden,

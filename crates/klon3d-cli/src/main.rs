@@ -932,14 +932,14 @@ fn befehl_roehre(args: &[String]) -> ExitCode {
 // ────────────────────────────────────────────────────────── koerper ──
 
 fn befehl_koerper(args: &[String]) -> ExitCode {
-    use klon3d_koerper::koerper::{aus_smis_mit, ordner};
+    use klon3d_koerper::koerper::{aus_smis_mit, makehuman_weg, ordner};
 
-    const AUFRUF: &str =
-        "Aufruf: klon3d koerper <massdatei.smis> [--out <koerper.obj>] [--ordner <Resizing>] [--wie-clo]";
+    const AUFRUF: &str = "Aufruf: klon3d koerper <massdatei.smis> [--out <koerper.obj>] [--ordner <Resizing>] [--wie-clo] [--makehuman]";
     let mut smis_pfad = None;
     let mut aus = None;
     let mut resizing = ordner();
     let mut nachformen = true;
+    let mut nur_makehuman = false;
     let mut i = 0;
     while i < args.len() {
         match args[i].as_str() {
@@ -947,6 +947,11 @@ fn befehl_koerper(args: &[String]) -> ExitCode {
             // klon3d's post-shaping between waist and hip
             "--wie-clo" => {
                 nachformen = false;
+                i += 1;
+            }
+            // the MakeHuman path even where CLO's resizing data exists
+            "--makehuman" => {
+                nur_makehuman = true;
                 i += 1;
             }
             o @ ("--out" | "--ordner") => {
@@ -991,7 +996,18 @@ fn befehl_koerper(args: &[String]) -> ExitCode {
     };
 
     let t0 = std::time::Instant::now();
-    let k = match aus_smis_mit(&resizing, &|n| smis.wert(n), nachformen) {
+    let gebaut = if nur_makehuman {
+        match klon3d_koerper::koerper_quelle::ordner() {
+            Some(o) => makehuman_weg(&o, &|n| smis.wert(n)),
+            None => Err(format!(
+                "{} nicht gefunden (MakeHuman-Assets fehlen)",
+                klon3d_koerper::koerper_quelle::ORDNER
+            )),
+        }
+    } else {
+        aus_smis_mit(&resizing, &|n| smis.wert(n), nachformen)
+    };
+    let k = match gebaut {
         Ok(k) => k,
         Err(e) => {
             eprintln!("Körper nicht formbar: {e}");

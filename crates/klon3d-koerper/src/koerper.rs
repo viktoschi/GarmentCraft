@@ -1,7 +1,7 @@
 //! The user's body from her measurement file: entry point of `klon3d.exe` and
 //! later of the simulation.
 //!
-//! Three paths, tried in this order ([`Weg`], `koerper_weg.rs`):
+//! Four paths, tried in this order ([`Weg`], `koerper_weg.rs`):
 //!
 //! 1. **Reference shaping chain** ([`crate::kette_referenz`], findings/64) — the
 //!    basis: BASE + DETAIL Human over the `.bd` fields, calibration, symmetry,
@@ -11,11 +11,15 @@
 //! 2. **Older shaping chain** ([`crate::kette`], findings/31) — only for old
 //!    resizing folders when the reference data is missing.
 //! 3. **Newton fit** ([`crate::person`] + [`crate::anpassen`], findings/23, 24)
-//!    — last fallback; needs only `BaseMesh.obj` and the `DETAIL_Advanced`
-//!    fields.
+//!    — needs only `BaseMesh.obj` and the `DETAIL_Advanced` fields.
+//! 4. **MakeHuman body** ([`crate::koerper_quelle`] + `anpassen`, issue #65) —
+//!    the shipped CC0 base mesh with MakeHuman's own female and breast targets,
+//!    pulled onto the shape targets of the `.smis` file. Needs **no CLO file at
+//!    all**; [`makehuman_weg`] is public so it can be forced (`--makehuman`).
 //!
-//! In all three cases the output is the `body` group (points 0 … 31 421) in mm
-//! with its triangles.
+//! Paths 1–3 give the `body` group (points 0 … 31 421) in mm with its triangles,
+//! path 4 MakeHuman's `body` group (13 380 points, plus the rings and corners
+//! [`crate::anpassen::formen`] inserts).
 //!
 //! On the reference path follows klon3d's own **post-shaping between waist and
 //! hip** ([`crate::nachformung`], findings/124), which goes beyond the reference
@@ -25,7 +29,7 @@
 
 use std::path::{Path, PathBuf};
 
-use crate::anpassen::anpassen;
+use crate::anpassen::{anpassen, formlinien_aus_smis, formziel_ebenen, formziele_aus_smis, formen};
 use crate::formung::{namen_vektor, referenz_vektor, Formung};
 use crate::kette::KOERPER;
 use crate::kette_referenz::{Ende, Ganze, KetteReferenz, Konfiguration};
@@ -53,6 +57,9 @@ pub enum Weg {
     KetteAlt,
     /// Old path, Newton fit onto the outline (`anpassen.rs`).
     Anpassen,
+    /// MakeHuman base mesh pulled onto the shape targets (`koerper_quelle.rs`
+    /// + `anpassen.rs`). Needs no CLO file.
+    Makehuman,
 }
 
 impl Weg {
@@ -61,6 +68,7 @@ impl Weg {
             Weg::Kette => "Formungskette (Referenz)",
             Weg::KetteAlt => "Formungskette (alt)",
             Weg::Anpassen => "anpassen (Fallback)",
+            Weg::Makehuman => "MakeHuman + Formziele",
         }
     }
 }
@@ -184,9 +192,26 @@ pub fn aus_smis_mit(
             })
         }
         Err(grund) => {
+            // No reference data. The older chain when its folder is there,
+            // `anpassen` when CLO's older `Advanced` files are (that is the
+            // case `fallback_ohne_kettendaten` builds), and MakeHuman last -
+            // the only path that needs no CLO file at all (issue #65).
             let mut k = match weg_alt(ordner, wert) {
                 Ok(k) => k,
-                Err(_) => alter_weg(ordner, wert)?,
+                Err(_) => match alter_weg(ordner, wert) {
+                    Ok(k) => k,
+                    Err(alt) => match crate::koerper_quelle::ordner() {
+                        Some(o) => makehuman_weg(&o, wert).map_err(|mh| {
+                            format!("CLO-Pfad: {alt}; MakeHuman: {mh}")
+                        })?,
+                        None => {
+                            return Err(format!(
+                                "CLO-Pfad: {alt}; {} fehlt",
+                                crate::koerper_quelle::ORDNER
+                            ))
+                        }
+                    },
+                },
             };
             k.meldungen
                 .insert(0, format!("Referenzkette nicht ladbar aus {}: {grund}", ordner.display()));
@@ -308,6 +333,70 @@ fn anordnung_aus_clo(ordner: &Path, netz: &Netz) -> Result<Anordnung, String> {
         achsel: [lm(16)?, lm(17)?],
         brustpunkt: [lm(18)?, lm(19)?],
         ellbogen: [lm(49)?, lm(52)?],
+    })
+}
+
+/// Der Körper aus MakeHuman, auf ihre Formziele gezogen — **ohne CLO-Daten**.
+///
+/// `ordner_makehuman` ist der Ordner mit `base.obj` und den Zielen
+/// ([`crate::koerper_quelle::ORDNER`]); `wert` liefert die Maße in cm.
+///
+/// Der Ablauf ist der aus Issue #65: Grundkörper in ihrer Körpergröße
+/// ([`crate::koerper_quelle::makehuman`]), dann die Formziele aus der Maßdatei
+/// ([`formziele_aus_smis`]), deren Messhöhen ([`formlinien_aus_smis`]) als
+/// Querschnitte ([`formziel_ebenen`]) und schliesslich [`formen`].
+///
+/// Die Meldungen sagen, was am Ziel nicht messbar oder nicht konstruierbar war
+/// und wie weit die Linien danach noch daneben liegen; still wird nichts
+/// übersprungen.
+pub fn makehuman_weg(
+    ordner_makehuman: &Path,
+    wert: &dyn Fn(&str) -> Option<f64>,
+) -> Result<Koerper, String> {
+    let hoehe_cm = wert("height").filter(|h| *h > 0.0).unwrap_or(160.0);
+    let mut netz = crate::koerper_quelle::makehuman(ordner_makehuman, hoehe_cm * 10.0)?;
+    let punkte_vorher = netz.punkte.len();
+
+    let formziele = formziele_aus_smis(wert);
+    let hoehen = formlinien_aus_smis(wert);
+    let (ebenen, mut meldungen) = formziel_ebenen(&formziele, &hoehen, wert);
+    meldungen.extend(formziele.meldungen.iter().cloned());
+    meldungen.insert(
+        0,
+        format!(
+            "MakeHuman: {punkte_vorher} Punkte, Zielgrösse {hoehe_cm:.1} cm, {} Formlinien",
+            ebenen.len()
+        ),
+    );
+
+    let (linien, form_meldungen) = formen(&mut netz, &ebenen);
+    meldungen.extend(form_meldungen);
+    for l in &linien {
+        let zeile = l
+            .fehler()
+            .iter()
+            .map(|(art, f)| match f {
+                Some(f) => format!("{} {f:+.2}", art.name()),
+                None => format!("{} —", art.name()),
+            })
+            .collect::<Vec<_>>()
+            .join(", ");
+        meldungen.push(format!("{} bei {:.1} cm: {zeile}", l.ort.name(), l.hoehe));
+    }
+    if linien.len() < ebenen.len() {
+        meldungen.push(format!(
+            "{} von {} Formlinien geformt",
+            linien.len(),
+            ebenen.len()
+        ));
+    }
+
+    Ok(Koerper {
+        netz,
+        weg: Weg::Makehuman,
+        meldungen,
+        kette: None,
+        nachformung: None,
     })
 }
 

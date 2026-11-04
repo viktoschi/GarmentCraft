@@ -431,7 +431,25 @@ fn umfangsschnitt_mit(
 /// Gibt die Hüllpunkte (ohne den angehängten Schlusspunkt) und die Länge
 /// zurück. `q[0]` wird nie gestrichen, und es gibt keine zweite Runde über
 /// die Nahtstelle; so verhält sich das Verfahren der Spezifikation.
+///
+/// **Die Richtung der Kette zählt.** Das Verfahren läuft die Kette einmal
+/// durch und streicht dabei Ecken; es ist kein echter Hüllenalgorithmus, weil
+/// es `q[0]` schont und die Nahtstelle nicht nachfasst. Läuft es gegen den
+/// Uhrzeigersinn einer nach aussen gedrehten Fläche, streicht es die falschen
+/// Punkte — an einem Rumpfring des MakeHuman-Körpers wurde aus 97,19 cm so
+/// 5,29 cm mit drei Hüllpunkten. Die Schnittkette kommt aus einem fremden Netz
+/// und hat keine zugesicherte Richtung, deshalb wird hier **beide** Richtungen
+/// gerechnet und die längere genommen. Bei CLOs Rumpf ist die alte Richtung
+/// ohnehin die längere; dort ändert sich nichts.
 pub fn huelle(kette: &[Punkt3], n: Punkt3) -> (Vec<Punkt3>, f64) {
+    let (h, l) = huelle_richtung(kette, n);
+    let rueck: Vec<Punkt3> = kette.iter().rev().copied().collect();
+    let (h2, l2) = huelle_richtung(&rueck, n);
+    if l2 > l { (h2, l2) } else { (h, l) }
+}
+
+/// Eine Richtung von [`huelle`], ohne Windungsschutz.
+fn huelle_richtung(kette: &[Punkt3], n: Punkt3) -> (Vec<Punkt3>, f64) {
     let m = kette.len();
     if m == 0 {
         return (Vec::new(), 0.0);
@@ -493,10 +511,20 @@ pub fn waagerecht(v: &[Punkt3], d: &Messdaten, p: Punkt3, seg: i32) -> f64 {
     huelle(&s.kette, WAAGERECHT).1
 }
 
+/// Waagerechte konvexe Hülle des Rumpfs auf Höhe `y`, Ebene durch
+/// `(0, y, 0)`, mit ihrer Länge.
+///
+/// Die Hülle selbst wird gebraucht, sobald nicht nur der Umfang zählt:
+/// Brustpunktabstand, Teilbögen, Breite und Tiefe (`crate::bogenmasse`).
+pub fn rumpf_huelle(v: &[Punkt3], d: &Messdaten, y: f64) -> (Vec<Punkt3>, f64) {
+    let s = umfangsschnitt(v, d, [0.0, y, 0.0], WAAGERECHT, segment::RUMPF);
+    huelle(&s.kette, WAAGERECHT)
+}
+
 /// Waagerechter Hüllenumfang des Rumpfs auf Höhe `y`, Ebene durch
 /// `(0, y, 0)` wie beim Abtasten der Abnahme.
 pub fn rumpf_waagerecht(v: &[Punkt3], d: &Messdaten, y: f64) -> f64 {
-    waagerecht(v, d, [0.0, y, 0.0], segment::RUMPF)
+    rumpf_huelle(v, d, y).1
 }
 
 /// Die gewählten Kandidaten der fünf Rumpfumfänge (Abschnitt 3).
