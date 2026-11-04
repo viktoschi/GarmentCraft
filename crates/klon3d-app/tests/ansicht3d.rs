@@ -61,6 +61,7 @@ fn schnappschuss() -> Schnappschuss {
         rechenzeit_s: 0.0,
         dauer_s: 0.0,
         fertig: false,
+        karte: None,
     }
 }
 

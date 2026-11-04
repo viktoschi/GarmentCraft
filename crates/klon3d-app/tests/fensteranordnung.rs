@@ -103,8 +103,6 @@ fn werkzeugleisten_mit_gesperrten_knoepfen() {
         ("Rückgängig", "Strg+Z"),
         ("Wiederholen", "Strg+Y"),
         ("Avatar", "Umschalt+A"),
-        ("Dehnungskarte", "Alt+7"),
-        ("Passformkarte", "Alt+8"),
     ] {
         let k = h
             .query_all_by_role_and_label(Role::Button, knopf)
@@ -131,7 +129,17 @@ fn werkzeugleisten_mit_gesperrten_knoepfen() {
     );
     // The working buttons of the 3D toolbar. Simulation and single step need CLO's body folder;
     // without it (the CI has no CLO installation) they are disabled and say which folder is missing.
-    for knopf in ["Simulation", "Einzelschritt", "Netz", "Kamera einpassen"] {
+    // The map buttons work without a run as well: the choice is remembered and arrives with the
+    // next snapshot.
+    for knopf in [
+        "Simulation",
+        "Einzelschritt",
+        "Netz",
+        "Kamera einpassen",
+        "Dehnungskarte",
+        "Passformkarte",
+        "Abstandskarte",
+    ] {
         let k = h
             .query_all_by_role_and_label(Role::Button, knopf)
             .find(|n| !in_einem_menue(n))

@@ -50,6 +50,7 @@ use std::sync::Arc;
 
 use eframe::{egui, egui_wgpu, wgpu};
 
+use crate::karten::{Karte, Kartenwerte, KOMFORT_ABSTAND_MM};
 use crate::simulation::{Bau, Schnappschuss};
 
 /// Sample count of the pass (see the module documentation).
@@ -170,6 +171,12 @@ struct Stand {
     ziel_milli: [i64; 3],
     netz: bool,
     thema_hell: bool,
+    /// The map painted on the cloth; part of the state because it decides the vertex colours.
+    ///
+    /// Taken from the snapshot, not from the selection: the selection is a request, and the values
+    /// for it arrive with the next snapshot. Colouring with the selection would paint the old
+    /// numbers on the new ramp for one frame.
+    karte: Option<Karte>,
 }
 
 impl Default for Ansicht3d {
@@ -264,7 +271,7 @@ impl Ansicht3d {
     }
 
     /// What the built data must match; a change means rebuilding it.
-    fn stand(&self, bild: usize, thema_hell: bool) -> Stand {
+    fn stand(&self, bild: usize, thema_hell: bool, karte: Option<Karte>) -> Stand {
         let milli = |v: f64| (v * 1000.0).round() as i64;
         Stand {
             bild,
@@ -274,6 +281,7 @@ impl Ansicht3d {
             ziel_milli: self.ziel.map(milli),
             netz: self.netz,
             thema_hell,
+            karte,
         }
     }
 
@@ -329,7 +337,10 @@ impl Ansicht3d {
         // Only when the frame or the camera changed: the vertex data follows the newest snapshot,
         // not the solver's frames.
         let thema_hell = !ui.visuals().dark_mode;
-        let stand = self.stand(bild.bild, thema_hell);
+        // The map the snapshot carries – not the one selected: the selection is a request, the
+        // values arrive with the next snapshot.
+        let karte = bild.karte.as_ref().map(|k| k.karte);
+        let stand = self.stand(bild.bild, thema_hell, karte);
         if self.stand != Some(stand) {
             let netzfarbe = if thema_hell {
                 [0.16, 0.16, 0.18]
@@ -341,6 +352,7 @@ impl Ansicht3d {
                 &bild.x,
                 self,
                 self.netz.then_some(netzfarbe),
+                bild.karte.as_ref(),
             )));
             self.stand = Some(stand);
         }
@@ -357,6 +369,15 @@ impl Ansicht3d {
             rect,
             AnsichtCallback { daten, format },
         ));
+        // After the callback: the shapes painted after it lie on top of the 3D image.
+        if let Some((karte, werte)) = karten_werte(bild) {
+            legende(ui, &maler, rect, karte, werte, !bau.koerper.is_empty());
+            if let Some(zeiger) = resp.hover_pos() {
+                if let Some(wert) = wert_unter(rect, self, &bild.x, werte, zeiger) {
+                    wert_hinweis(ui, &maler, rect, zeiger, karte, wert);
+                }
+            }
+        }
     }
 
     /// Drag rotates, middle drag pans, wheel zooms, double click frames.
@@ -477,9 +498,32 @@ fn als_bytes_u32(d: &[u32]) -> &[u8] {
     unsafe { std::slice::from_raw_parts(d.as_ptr().cast::<u8>(), std::mem::size_of_val(d)) }
 }
 
+/// The mean of the three corner colours a triangle names.
+///
+/// `d` holds indices **into `f`**, so every triangle gets its own corners' colours – not the first
+/// three entries of the list, which would paint the whole garment in one colour.
+fn mittel_farbe(f: &[[f32; 3]], d: [u32; 3]) -> [f32; 3] {
+    let (f0, f1, f2) = (f[d[0] as usize], f[d[1] as usize], f[d[2] as usize]);
+    [
+        (f0[0] + f1[0] + f2[0]) / 3.0,
+        (f0[1] + f1[1] + f2[1]) / 3.0,
+        (f0[2] + f1[2] + f2[2]) / 3.0,
+    ]
+}
+
 /// Assemble one frame: body and cloth triangles sorted back to front about the camera, each face
 /// flat-shaded with its normal turned towards the camera, then the cloth edges as lines.
-fn bauen(bau: &Bau, x: &[[f64; 3]], kamera: &Ansicht3d, netzfarbe: Option<[f32; 3]>) -> Nutzlast {
+///
+/// `karte` carries one value per cloth point; a triangle then takes the mean colour of its three
+/// corners, so the ramp stays continuous across neighbouring triangles. Without a map the cloth
+/// keeps its single colour ([`STOFF_FARBE`]).
+fn bauen(
+    bau: &Bau,
+    x: &[[f64; 3]],
+    kamera: &Ansicht3d,
+    netzfarbe: Option<[f32; 3]>,
+    karte: Option<&Kartenwerte>,
+) -> Nutzlast {
     let auge = kamera.auge();
     let punkte = |i: u32| -> [f64; 3] {
         let i = i as usize;
@@ -489,12 +533,26 @@ fn bauen(bau: &Bau, x: &[[f64; 3]], kamera: &Ansicht3d, netzfarbe: Option<[f32; 
             x.get(i - bau.koerper.len()).copied().unwrap_or([0.0; 3])
         }
     };
+    // Colour per cloth point. Only when the values cover every point the triangles use: a short
+    // list would leave the rest with a colour that means nothing.
+    let stoff_start = bau.koerper.len() as u32;
+    let gebraucht = bau
+        .stoff_dreiecke
+        .iter()
+        .flatten()
+        .map(|i| *i as usize + 1)
+        .max()
+        .unwrap_or(0);
+    let farben: Option<Vec<[f32; 3]>> = karte.map(|k| k.farben()).filter(|f| f.len() >= gebraucht);
 
     // (corners, colour, centre distance from the eye)
     let mut dreiecke: Vec<([u32; 3], [f32; 3], f64)> =
         Vec::with_capacity(bau.koerper_dreiecke.len() + bau.stoff_dreiecke.len());
-    let stoff_start = bau.koerper.len() as u32;
-    let mut sammeln = |liste: &[[u32; 3]], versatz: u32, farbe: [f32; 3], vorzug: f64| {
+    let mut sammeln = |liste: &[[u32; 3]],
+                       versatz: u32,
+                       farbe: Option<&[[f32; 3]]>,
+                       einfarbig: [f32; 3],
+                       vorzug: f64| {
         for d in liste {
             let e = [d[0] + versatz, d[1] + versatz, d[2] + versatz];
             let (a, b, c) = (punkte(e[0]), punkte(e[1]), punkte(e[2]));
@@ -503,17 +561,28 @@ fn bauen(bau: &Bau, x: &[[f64; 3]], kamera: &Ansicht3d, netzfarbe: Option<[f32; 
                 (a[1] + b[1] + c[1]) / 3.0,
                 (a[2] + b[2] + c[2]) / 3.0,
             ];
-            let d = [mitte[0] - auge[0], mitte[1] - auge[1], mitte[2] - auge[2]];
-            let entfernung = (d[0] * d[0] + d[1] * d[1] + d[2] * d[2]).sqrt();
-            dreiecke.push((e, farbe, entfernung - vorzug));
+            let ab = [mitte[0] - auge[0], mitte[1] - auge[1], mitte[2] - auge[2]];
+            let entfernung = (ab[0] * ab[0] + ab[1] * ab[1] + ab[2] * ab[2]).sqrt();
+            // The corners' own colours, averaged: `d` holds the indices *within* the list.
+            let mittel = match farbe {
+                Some(f) => mittel_farbe(f, *d),
+                None => einfarbig,
+            };
+            dreiecke.push((e, mittel, entfernung - vorzug));
         }
     };
-    sammeln(&bau.koerper_dreiecke, 0, KOERPER_FARBE, 0.0);
+    sammeln(&bau.koerper_dreiecke, 0, None, KOERPER_FARBE, 0.0);
     // The cloth lies a fraction of a millimetre on the skin, so comparing raw distances lets body
     // triangles whose centre happens to be nearer win that race and punch grey speckles through the
     // garment. A bias shorter than the thinnest cloth-to-skin gap keeps the cloth in front of the
     // body it covers, and far shorter than a limb's distance so it cannot reach through anything.
-    sammeln(&bau.stoff_dreiecke, stoff_start, STOFF_FARBE, STOFF_VORZUG);
+    sammeln(
+        &bau.stoff_dreiecke,
+        stoff_start,
+        farben.as_deref(),
+        STOFF_FARBE,
+        STOFF_VORZUG,
+    );
     // Far to near. Stable, so equal distances keep their order and the picture does not flicker.
     dreiecke.sort_by(|a, b| b.2.partial_cmp(&a.2).unwrap_or(std::cmp::Ordering::Equal));
 
@@ -677,6 +746,286 @@ fn norm(a: [f64; 3]) -> [f64; 3] {
     } else {
         [0.0, 0.0, 1.0]
     }
+}
+
+// ---------------------------------------------------------------------------------------------
+// Inspection maps: legend and the value under the cursor
+
+/// Width of the legend box, in points (narrower in a narrow pane).
+const LEGENDE_BREITE: f32 = 176.0;
+/// Padding inside the legend box and the value box, in points.
+const LEGENDE_RAND: f32 = 8.0;
+/// Height of the colour bar, in points.
+const LEGENDE_BALKEN: f32 = 12.0;
+/// How near the cursor has to be to a cloth point, in points.
+const ZEIGER_RADIUS: f32 = 14.0;
+
+/// The map and its values, when the snapshot carries them.
+fn karten_werte(bild: &Schnappschuss) -> Option<(Karte, &Kartenwerte)> {
+    bild.karte.as_ref().map(|w| (w.karte, w))
+}
+
+/// A number the way the rest of the window writes it: German comma, one decimal at most.
+fn zahl_text(v: f64) -> String {
+    if !v.is_finite() {
+        return "–".to_string();
+    }
+    let gerundet = (v * 10.0).round() / 10.0;
+    if (gerundet - gerundet.round()).abs() < 1e-9 {
+        format!("{}", gerundet.round() as i64)
+    } else {
+        format!("{gerundet:.1}").replace('.', ",")
+    }
+}
+
+/// A ramp colour as egui sees it: the same sRGB bytes the command line writes into an OBJ.
+fn egui_farbe(c: [u8; 3]) -> egui::Color32 {
+    egui::Color32::from_rgb(c[0], c[1], c[2])
+}
+
+/// Background of an overlaid box, dark or light with the theme, so the text stays readable on both.
+fn feld_grund(vis: &egui::Visuals) -> egui::Color32 {
+    if vis.dark_mode {
+        egui::Color32::from_black_alpha(200)
+    } else {
+        egui::Color32::from_white_alpha(220)
+    }
+}
+
+/// What the map does not say by its title and scale alone.
+fn notizen(karte: Karte, hat_koerper: bool) -> Vec<String> {
+    let mut zeilen = match karte {
+        Karte::Dehnung => vec!["größte Hauptdehnung".to_string()],
+        Karte::Passform => vec![
+            "100 % = Grenze der Toleranz".to_string(),
+            format!(
+                "Dehnung {} % · Abstand {} mm",
+                zahl_text(klon3d_sim::dehnung::UEBER_DEHNUNG * 100.0),
+                zahl_text(KOMFORT_ABSTAND_MM)
+            ),
+        ],
+        Karte::Abstand => vec!["0 mm = auf der Haut · darunter blau".to_string()],
+    };
+    if !hat_koerper && karte == Karte::Passform {
+        // Without a body only the strain half can be measured; saying so is better than letting
+        // the scale look like the whole picture.
+        zeilen.push("ohne Körper: nur Dehnung".to_string());
+    }
+    zeilen
+}
+
+/// The legend of the map on screen, bottom left: title, fixed scale with its unit, the ramp and
+/// the notes that keep the colours readable.
+///
+/// The bar is drawn from [`Karte::farbe`], the same bytes the garment is coloured with (there
+/// converted to linear light for the shader), so bar and cloth cannot drift apart.
+fn legende(
+    ui: &egui::Ui,
+    maler: &egui::Painter,
+    rect: egui::Rect,
+    karte: Karte,
+    werte: &Kartenwerte,
+    hat_koerper: bool,
+) {
+    let vis = ui.visuals();
+    let breite = LEGENDE_BREITE.min((rect.width() - 20.0).max(LEGENDE_BREITE / 2.0));
+    let innen = breite - 2.0 * LEGENDE_RAND;
+
+    let mut zeilen: Vec<(std::sync::Arc<egui::Galley>, egui::Color32)> = Vec::new();
+    let mut anfuegen = |text: &str, font: egui::FontId, farbe: egui::Color32| {
+        zeilen.push((maler.layout(text.into(), font, farbe, innen), farbe));
+    };
+    anfuegen(
+        &karte.titel(),
+        egui::FontId::proportional(13.0),
+        vis.strong_text_color(),
+    );
+    anfuegen(
+        &format!(
+            "{} … {} {}",
+            zahl_text(karte.von()),
+            zahl_text(karte.bis()),
+            karte.einheit()
+        ),
+        egui::FontId::monospace(11.0),
+        vis.text_color(),
+    );
+    for text in notizen(karte, hat_koerper) {
+        anfuegen(&text, egui::FontId::proportional(11.0), vis.text_color());
+    }
+    // The grey of the ramp is not on the ramp: it marks points the measure could not reach.
+    let grau = werte.je_punkt.iter().any(|v| !v.is_finite());
+    if grau {
+        anfuegen(
+            "grau: kein Wert",
+            egui::FontId::proportional(11.0),
+            egui_farbe(klon3d_sim::farbkarte::UNGUELTIG),
+        );
+    }
+
+    let mut hoehe = LEGENDE_RAND;
+    for (galley, _) in &zeilen {
+        hoehe += galley.size().y + 2.0;
+    }
+    hoehe += 4.0 + LEGENDE_BALKEN + LEGENDE_RAND;
+
+    let feld = egui::Rect::from_min_size(
+        egui::pos2(rect.left() + 10.0, rect.bottom() - 10.0 - hoehe),
+        egui::vec2(breite, hoehe),
+    );
+    maler.rect_filled(feld, 4.0, feld_grund(vis));
+    maler.rect_stroke(
+        feld,
+        4.0,
+        vis.window_stroke(),
+        egui::StrokeKind::Inside,
+    );
+
+    let mut y = feld.top() + LEGENDE_RAND;
+    for (galley, farbe) in zeilen {
+        let h = galley.size().y;
+        maler.galley(egui::pos2(feld.left() + LEGENDE_RAND, y), galley, farbe);
+        y += h + 2.0;
+    }
+
+    // The ramp, sampled finely enough that the steps are not visible as bands.
+    let balken = egui::Rect::from_min_size(
+        egui::pos2(feld.left() + LEGENDE_RAND, y + 2.0),
+        egui::vec2(innen, LEGENDE_BALKEN),
+    );
+    let schritte = 64;
+    for i in 0..schritte {
+        let t0 = i as f32 / schritte as f32;
+        let t1 = (i + 1) as f32 / schritte as f32;
+        let mitte = (t0 + t1) / 2.0;
+        let wert = karte.von() + (karte.bis() - karte.von()) * mitte as f64;
+        maler.rect_filled(
+            egui::Rect::from_min_max(
+                egui::pos2(balken.left() + balken.width() * t0, balken.top()),
+                egui::pos2(balken.left() + balken.width() * t1, balken.bottom()),
+            ),
+            0.0,
+            egui_farbe(karte.farbe(wert)),
+        );
+    }
+    maler.rect_stroke(
+        balken,
+        0.0,
+        egui::Stroke::new(1.0, vis.text_color()),
+        egui::StrokeKind::Inside,
+    );
+}
+
+/// A point of the scene in the picture, with its depth: `(x, y, w)` in points and the clip `w`,
+/// which grows with the distance from the eye.
+fn projizieren(m: &[f32], p: &[f64; 3], rect: egui::Rect) -> Option<(f32, f32, f64)> {
+    let v = [p[0] as f32, p[1] as f32, p[2] as f32];
+    let mut clip = [0.0f32; 4];
+    for (i, c) in clip.iter_mut().enumerate() {
+        // Column major, as in the shader: element (row i, column j) is `m[j * 4 + i]`.
+        *c = m[i] * v[0] + m[4 + i] * v[1] + m[8 + i] * v[2] + m[12 + i];
+    }
+    if clip[3] <= 1e-6 {
+        return None;
+    }
+    let x = rect.left() + (clip[0] / clip[3] * 0.5 + 0.5) * rect.width();
+    // NDC y points up, the window's down.
+    let y = rect.top() + (0.5 - clip[1] / clip[3] * 0.5) * rect.height();
+    Some((x, y, clip[3] as f64))
+}
+
+/// The value of the cloth point nearest the cursor, if one is close enough.
+///
+/// Projected with the same matrix the shader uses, so the value belongs to what is drawn. Of the
+/// points within [`ZEIGER_RADIUS`] the one nearest the camera wins: the garment covers itself,
+/// and the cursor is meant to read the front.
+fn wert_unter(
+    rect: egui::Rect,
+    kamera: &Ansicht3d,
+    x: &[[f64; 3]],
+    werte: &Kartenwerte,
+    zeiger: egui::Pos2,
+) -> Option<f64> {
+    let m = blick_matrix(&kamera.auge(), &kamera.ziel);
+    // (distance to the cursor, depth, value)
+    let mut bestes: Option<(f32, f64, f64)> = None;
+    for (i, p) in x.iter().enumerate() {
+        let Some(&wert) = werte.je_punkt.get(i) else {
+            continue;
+        };
+        if !wert.is_finite() {
+            continue;
+        }
+        let Some((sx, sy, tiefe)) = projizieren(&m, p, rect) else {
+            continue;
+        };
+        let d = egui::pos2(sx, sy).distance(zeiger);
+        if d > ZEIGER_RADIUS {
+            continue;
+        }
+        let besser = match bestes {
+            None => true,
+            Some((bisher, bisher_tiefe, _)) => {
+                d < bisher - 0.5 || (d <= bisher + 0.5 && tiefe < bisher_tiefe)
+            }
+        };
+        if besser {
+            bestes = Some((d, tiefe, wert));
+        }
+    }
+    bestes.map(|(_, _, wert)| wert)
+}
+
+/// The value under the cursor, as a small box beside it: the number with its unit and a swatch of
+/// the colour it has on the garment.
+fn wert_hinweis(
+    ui: &egui::Ui,
+    maler: &egui::Painter,
+    rect: egui::Rect,
+    zeiger: egui::Pos2,
+    karte: Karte,
+    wert: f64,
+) {
+    let vis = ui.visuals();
+    let text = format!("{} {}", zahl_text(wert), karte.einheit());
+    let galley = maler.layout(
+        text.as_str().into(),
+        egui::FontId::monospace(12.0),
+        vis.strong_text_color(),
+        200.0,
+    );
+    let kasten = egui::vec2(
+        galley.size().x + 2.0 * LEGENDE_RAND + 14.0,
+        galley.size().y + 2.0 * LEGENDE_RAND,
+    );
+    let mut pos = zeiger + egui::vec2(14.0, 14.0);
+    if pos.x + kasten.x > rect.right() - 4.0 {
+        pos.x = zeiger.x - 14.0 - kasten.x;
+    }
+    if pos.y + kasten.y > rect.bottom() - 4.0 {
+        pos.y = zeiger.y - 14.0 - kasten.y;
+    }
+    let feld = egui::Rect::from_min_size(pos, kasten);
+    maler.rect_filled(feld, 4.0, feld_grund(vis));
+    maler.rect_stroke(
+        feld,
+        4.0,
+        vis.window_stroke(),
+        egui::StrokeKind::Inside,
+    );
+    let kante = egui::Rect::from_min_size(
+        egui::pos2(
+            feld.left() + LEGENDE_RAND,
+            feld.center().y - 5.0,
+        ),
+        egui::vec2(10.0, 10.0),
+    );
+    maler.rect_filled(kante, 2.0, egui_farbe(karte.farbe(wert)));
+    maler.galley(
+        egui::pos2(feld.left() + LEGENDE_RAND + 14.0, feld.top() + LEGENDE_RAND),
+        galley,
+        vis.strong_text_color(),
+    );
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -1009,5 +1358,30 @@ impl Vorrat {
     /// pipeline, which wgpu does not return, so it is stored next to it.
     fn format(&self) -> wgpu::TextureFormat {
         self.format_wert
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::mittel_farbe;
+
+    /// Two triangles of a four-point cloth must not both take the colours of the first three
+    /// points: the mean has to use the corners the triangle itself names.
+    #[test]
+    fn jedes_dreieck_nimmt_die_farben_seiner_eigenen_ecken() {
+        let f = [
+            [1.0, 0.0, 0.0],
+            [0.0, 1.0, 0.0],
+            [0.0, 0.0, 1.0],
+            [0.0, 0.0, 0.0],
+        ];
+        // A quad as 0-1-2 and 0-2-3: the second triangle's corners are 0, 2 and 3.
+        let a = mittel_farbe(&f, [0, 1, 2]);
+        let b = mittel_farbe(&f, [0, 2, 3]);
+        for (i, wert) in a.iter().enumerate() {
+            assert!((wert - 1.0 / 3.0).abs() < 1e-6, "Dreieck 1, Kanal {i}: {wert}");
+        }
+        assert!((b[2] - 1.0 / 3.0).abs() < 1e-6, "Dreieck 2: {b:?}");
+        assert_ne!(a, b, "beide Dreiecke tragen dieselbe Farbe");
     }
 }

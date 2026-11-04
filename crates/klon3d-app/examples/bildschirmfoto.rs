@@ -26,12 +26,14 @@ use std::time::{Duration, Instant};
 use eframe::egui;
 use egui_kittest::wgpu::WgpuTestRenderer;
 use egui_kittest::Harness;
+use klon3d_app::karten::Karte;
 use klon3d_app::simulation::Befehl;
 use klon3d_app::App;
 
 const AUFRUF: &str = "Aufruf: bildschirmfoto [--muster <datei.sm2d>] [--aus <bild.png>]\n\
                      \x20             [--breite <punkte>] [--hoehe <punkte>] [--dunkel|--hell]\n\
                      \x20             [--massstab <punkte je Pixel>] [--simulieren <bilder>]\n\
+                     \x20             [--karte dehnung|passform|abstand]\n\
                      Kennung 3: kein Grafikbeschleuniger (wgpu-Adapter) vorhanden";
 
 /// The window as the app opens it (`main.rs`), unless the caller asks for another size.
@@ -93,6 +95,24 @@ fn main() -> ExitCode {
                 }
                 Err(e) => return e,
             },
+            "--karte" => match wert(i) {
+                Ok(w) => {
+                    opt.karte = match w.as_str() {
+                        "dehnung" => Some(Karte::Dehnung),
+                        "passform" => Some(Karte::Passform),
+                        "abstand" => Some(Karte::Abstand),
+                        "keine" | "aus" => None,
+                        a => {
+                            eprintln!(
+                                "--karte: unbekannte Karte {a:?} (dehnung, passform, abstand)\n{AUFRUF}"
+                            );
+                            return ExitCode::FAILURE;
+                        }
+                    };
+                    i += 2;
+                }
+                Err(e) => return e,
+            },
             "--dunkel" => {
                 opt.dunkel = Some(true);
                 i += 1;
@@ -130,6 +150,8 @@ struct Optionen {
     dunkel: Option<bool>,
     /// Solver frames to compute before the photo; 0 = no simulation.
     simulieren: usize,
+    /// The inspection map to show (needs `--simulieren`).
+    karte: Option<Karte>,
 }
 
 impl Default for Optionen {
@@ -142,6 +164,7 @@ impl Default for Optionen {
             massstab: 1.0,
             dunkel: None,
             simulieren: 0,
+            karte: None,
         }
     }
 }
@@ -188,6 +211,11 @@ fn renderer() -> Option<WgpuTestRenderer> {
 /// Give up after this long: the scene build (seconds) and the frames (≈ 0.3 s each) must fit.
 /// Bounded so that a stuck worker ends in an error instead of a hanging run.
 const SIMULATIONSFRIST: Duration = Duration::from_secs(600);
+
+/// How long to wait for a map: the distance to the body is measured in the worker, point by point,
+/// and takes a few seconds on a full garment. Longer than any plausible measurement, short enough
+/// that a map which never comes ends in an error instead of a hanging run.
+const KARTENFRIST: Duration = Duration::from_secs(300);
 
 /// Between two window passes: the solver works on the other cores, so a pause costs nothing but
 /// keeps this thread from fighting it for a core.
@@ -270,6 +298,37 @@ fn simulieren(figuren: &mut Harness<'_, App>, bilder: usize) -> Result<(), Strin
     Ok(())
 }
 
+/// Step the window until the snapshot that is shown carries `karte`.
+///
+/// [`klon3d_app::simulation::Simulation::karte_setzen`] only asks the worker; the values arrive as
+/// a snapshot of their own ([`klon3d_app::simulation::Meldung::Bild`]) once the worker has measured
+/// them. Waiting for the frame number would not do: the run is held, so no frame advances.
+fn warten_auf_karte(figuren: &mut Harness<'_, App>, karte: Karte) -> Result<(), String> {
+    let start = Instant::now();
+    loop {
+        figuren.step();
+        {
+            let s = &figuren.state().simulation;
+            if let Some(f) = s.fehler() {
+                return Err(format!("Simulation: {f}"));
+            }
+            if s.bild().and_then(|b| b.karte.as_ref()).is_some_and(|w| w.karte == karte) {
+                let dauer = start.elapsed().as_secs_f64();
+                println!("Karte {}: gemessen nach {dauer:.1} s", karte.titel());
+                return Ok(());
+            }
+        }
+        if start.elapsed() > KARTENFRIST {
+            return Err(format!(
+                "Karte {} nach {} s nicht gemessen",
+                karte.titel(),
+                KARTENFRIST.as_secs()
+            ));
+        }
+        std::thread::sleep(SCHRITT_PAUSE);
+    }
+}
+
 fn laufen(opt: &Optionen) -> Result<(), String> {
     let Some(renderer) = renderer() else {
         eprintln!("kein Grafikbeschleuniger (wgpu-Adapter) vorhanden");
@@ -308,10 +367,23 @@ fn laufen(opt: &Optionen) -> Result<(), String> {
 
     // After those passes: the 3D window needs its width from the layout, and the simulation
     // frames must not be computed while the panels still settle.
+    if opt.karte.is_some() && opt.simulieren == 0 {
+        return Err("--karte braucht --simulieren <bilder>: die Karte wird auf einem Bild gemessen".into());
+    }
     if opt.simulieren > 0 {
         simulieren(&mut figuren, opt.simulieren)?;
         // The last frames built the 3D vertex data for the frame reached; two passes let the
         // camera frame the scene and the 3D view draw it.
+        figuren.run();
+        figuren.run();
+    }
+    if let Some(karte) = opt.karte {
+        // The run is held; the worker measures the map on the frame that is standing and sends it
+        // once. The distance to the body is measured point by point and takes seconds, so the
+        // window is stepped until the snapshot carries the map – a fixed number of passes would
+        // photograph the garment in its plain colour and the legend would be missing.
+        figuren.state_mut().simulation.karte_setzen(Some(karte));
+        warten_auf_karte(&mut figuren, karte)?;
         figuren.run();
         figuren.run();
     }
@@ -341,5 +413,8 @@ fn laufen(opt: &Optionen) -> Result<(), String> {
             n => format!(", Simulierung nach {n} Bildern"),
         }
     );
+    if let Some(karte) = opt.karte {
+        println!("Karte: {}", karte.titel());
+    }
     Ok(())
 }

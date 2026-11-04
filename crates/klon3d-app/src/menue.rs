@@ -13,6 +13,7 @@ use egui::{Atom, Button, RichText, Theme};
 use crate::anordnung::{self, Bereich};
 use crate::ansicht3d::Blickwinkel;
 use crate::app::{Aktion, App, SPAETER};
+use crate::karten::Karte;
 use crate::muster::dateiname;
 
 /// Hover text of an entry that needs a pattern.
@@ -116,7 +117,14 @@ pub fn spaeter(ui: &mut egui::Ui, text: &str, kuerzel: &str) {
 }
 
 /// A checkbox entry for a toggle, the shortcut on the right; a click queues `aktion`.
-fn haken(ui: &mut egui::Ui, app: &mut App, text: &str, kuerzel: &str, an: bool, aktion: Aktion) {
+fn haken(
+    ui: &mut egui::Ui,
+    app: &mut App,
+    text: &str,
+    kuerzel: &str,
+    an: bool,
+    aktion: Aktion,
+) -> egui::Response {
     let mut zustand = an;
     let r = if kuerzel.is_empty() {
         ui.checkbox(&mut zustand, text)
@@ -129,6 +137,7 @@ fn haken(ui: &mut egui::Ui, app: &mut App, text: &str, kuerzel: &str, an: bool, 
     if r.clicked() {
         app.aktion(aktion);
     }
+    r
 }
 
 /// A checkbox entry for a toggle that shows something of a pattern; enabled only with one.
@@ -141,6 +150,24 @@ fn haken_mit_muster(ui: &mut egui::Ui, app: &mut App, text: &str, an: bool, akti
     if r.clicked() {
         app.aktion(aktion);
     }
+}
+
+/// A menu or toolbar entry for one inspection map: a checkbox that switches the map on, and off
+/// again when it is already shown.
+///
+/// One map at a time – picking another replaces the one on screen. The entry stays enabled without
+/// a simulation: the choice is remembered and arrives with the run that is started next.
+fn karte_haken(ui: &mut egui::Ui, app: &mut App, karte: Karte, kuerzel: &str) {
+    let gewaehlt = app.simulation.karte() == Some(karte);
+    haken(
+        ui,
+        app,
+        &karte.titel(),
+        kuerzel,
+        gewaehlt,
+        Aktion::KarteSetzen(if gewaehlt { None } else { Some(karte) }),
+    )
+    .on_hover_text(karte.erklaerung());
 }
 
 /// A checkbox entry that shows or hides part `b` of the window.
@@ -363,9 +390,9 @@ fn anzeige(app: &mut App, ui: &mut egui::Ui) {
             app.ansicht3d.netz,
             Aktion::NetzUmschalten,
         );
-        spaeter(ui, "Dehnungskarte", "Alt+7");
-        spaeter(ui, "Passformkarte", "Alt+8");
-        spaeter(ui, "Abstandskarte", "");
+        karte_haken(ui, app, Karte::Dehnung, "Alt+7");
+        karte_haken(ui, app, Karte::Passform, "Alt+8");
+        karte_haken(ui, app, Karte::Abstand, "");
     });
     ui.menu_button("2D-Schnitt", |ui| {
         let a = app.ansicht.anzeige;
@@ -562,8 +589,30 @@ pub fn werkzeugleiste_3d(app: &mut App, ui: &mut egui::Ui) {
     }
     ui.separator();
     spaeter_knopf(ui, "Avatar", "Avatar anzeigen (Umschalt+A)");
-    spaeter_knopf(ui, "Dehnungskarte", "Dehnungskarte (Alt+7)");
-    spaeter_knopf(ui, "Passformkarte", "Passformkarte (Alt+8)");
+    // One map at a time; a second click on the shown one puts it away.
+    for (karte, kuerzel) in [
+        (Karte::Dehnung, "Alt+7"),
+        (Karte::Passform, "Alt+8"),
+        (Karte::Abstand, ""),
+    ] {
+        let an = app.simulation.karte() == Some(karte);
+        let hinweis = if kuerzel.is_empty() {
+            format!("{} – {}", karte.titel(), karte.erklaerung())
+        } else {
+            format!("{} ({kuerzel}) – {}", karte.titel(), karte.erklaerung())
+        };
+        if ui
+            .add(Button::selectable(an, karte.titel()))
+            .on_hover_text(hinweis)
+            .clicked()
+        {
+            app.aktion(Aktion::KarteSetzen(if an {
+                None
+            } else {
+                Some(karte)
+            }));
+        }
+    }
 }
 
 /// The toolbar of the 2D window: fit, layout and the display toggles; hover texts name the

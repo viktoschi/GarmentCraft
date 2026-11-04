@@ -308,12 +308,13 @@ fn menues_und_gesperrte_eintraege() {
         ),
         (
             &["Anzeige", "3D-Kleidung"],
-            &["Netz"],
             &[
+                "Netz",
                 "Dehnungskarte Alt+7",
                 "Passformkarte Alt+8",
                 "Abstandskarte",
             ],
+            &[],
         ),
         (
             &["Anzeige", "2D-Schnitt"],

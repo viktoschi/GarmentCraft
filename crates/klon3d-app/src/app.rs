@@ -50,6 +50,7 @@ use crate::ansicht2d::Ansicht2d;
 use crate::ansicht3d::{Ansicht3d, Blickwinkel};
 use crate::bibliothek::Bibliothek;
 use crate::dateiwahl::{auflisten, passt, Dateiwahl, Zweck};
+use crate::karten::Karte;
 use crate::muster::{
     dateiname, delta4, dxf_ausgabe, naehte_vorschlagen, nahtliste_neben, netz_pruefen,
     obj_aus_muster, Ladeauftrag, Ladefehler, Muster, Nahtstand, Nahtvorschlag, Netzauftrag,
@@ -145,6 +146,8 @@ pub enum Aktion {
     ObjExportieren,
     /// Write the pattern's seam lines as AAMA DXF for CLO.
     DxfExportieren,
+    /// Show this inspection map in the 3D view (`None`: none).
+    KarteSetzen(Option<Karte>),
 }
 
 /// The help window shown, if any.
@@ -716,6 +719,7 @@ impl App {
             }
             Aktion::ObjExportieren => self.exportieren(Zweck::ObjSpeichern),
             Aktion::DxfExportieren => self.exportieren(Zweck::DxfSpeichern),
+            Aktion::KarteSetzen(karte) => self.simulation.karte_setzen(karte),
         }
         ctx.request_repaint();
     }
@@ -996,24 +1000,35 @@ impl App {
         if self.dateiwahl.is_some() || ctx.text_edit_focused() {
             return;
         }
-        let (strg_tab, f, l, zurueck, vor, naehte, laengen, leertaste) = ctx.input_mut(|i| {
-            (
-                // Ctrl must match exactly, so plain Tab below does not see Ctrl+Tab.
-                i.consume_key(Modifiers::COMMAND, Key::Tab),
-                i.consume_key(Modifiers::NONE, Key::F),
-                i.consume_key(Modifiers::NONE, Key::L),
-                // Shift+Tab first: `consume_key` ignores extra Shift.
-                i.consume_key(Modifiers::SHIFT, Key::Tab),
-                i.consume_key(Modifiers::NONE, Key::Tab),
-                i.consume_key(Modifiers::SHIFT, Key::S),
-                i.consume_key(Modifiers::SHIFT, Key::Z),
-                // CLO's shortcut for start/hold; consumed, so egui does not press a focused
-                // button with it as well.
-                i.consume_key(Modifiers::NONE, Key::Space),
-            )
-        });
+        let (strg_tab, f, l, zurueck, vor, naehte, laengen, leertaste, karte_dehnung, karte_passform) =
+            ctx.input_mut(|i| {
+                (
+                    // Ctrl must match exactly, so plain Tab below does not see Ctrl+Tab.
+                    i.consume_key(Modifiers::COMMAND, Key::Tab),
+                    i.consume_key(Modifiers::NONE, Key::F),
+                    i.consume_key(Modifiers::NONE, Key::L),
+                    // Shift+Tab first: `consume_key` ignores extra Shift.
+                    i.consume_key(Modifiers::SHIFT, Key::Tab),
+                    i.consume_key(Modifiers::NONE, Key::Tab),
+                    i.consume_key(Modifiers::SHIFT, Key::S),
+                    i.consume_key(Modifiers::SHIFT, Key::Z),
+                    // CLO's shortcut for start/hold; consumed, so egui does not press a focused
+                    // button with it as well.
+                    i.consume_key(Modifiers::NONE, Key::Space),
+                    // The two inspection maps of the issue have shortcuts; the distance map does
+                    // not (Alt+9 stays free for it if it ever gets one).
+                    i.consume_key(Modifiers::ALT, Key::Num7),
+                    i.consume_key(Modifiers::ALT, Key::Num8),
+                )
+            });
         if leertaste {
             self.aktion(Aktion::SimulationUmschalten);
+        }
+        if karte_dehnung {
+            self.karte_umschalten(Karte::Dehnung);
+        }
+        if karte_passform {
+            self.karte_umschalten(Karte::Passform);
         }
         if f {
             self.aktion(Aktion::Einpassen);
@@ -1041,6 +1056,16 @@ impl App {
                 Aktion::NaechstesTeil
             });
         }
+    }
+
+    /// Switch one inspection map on, or off when it is the one shown.
+    fn karte_umschalten(&mut self, karte: Karte) {
+        let neu = if self.simulation.karte() == Some(karte) {
+            None
+        } else {
+            Some(karte)
+        };
+        self.aktion(Aktion::KarteSetzen(neu));
     }
 
     /// Files dropped onto the window in this frame; one drop is one request

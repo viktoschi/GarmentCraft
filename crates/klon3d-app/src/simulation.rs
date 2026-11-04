@@ -32,6 +32,8 @@ use klon3d_pipeline::{Koerperquelle, Musternetz, Szene};
 pub use klon3d_sim::platzierung::Anziehen;
 use klon3d_sim::{ImplizitCg, ImplizitParameter, Material};
 
+use crate::karten::{Karte, Kartenwerte};
+
 /// Where the body comes from.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum Koerperdatei {
@@ -102,6 +104,8 @@ pub enum Befehl {
     Schritte(usize),
     /// Frame 0 with the positions of the scene as built.
     Zuruecksetzen,
+    /// Which inspection map the snapshots carry from now on (`None`: no map).
+    Karte(Option<Karte>),
     /// End the thread (pattern change, quit).
     Beenden,
 }
@@ -134,6 +138,8 @@ pub struct Schnappschuss {
     pub dauer_s: f64,
     /// The run is over.
     pub fertig: bool,
+    /// The inspection map measured on this frame, if one is selected.
+    pub karte: Option<Kartenwerte>,
 }
 
 /// A piece of the mesh, where its points and triangles sit in the scene.
@@ -302,6 +308,8 @@ struct Lauf {
     rechenzeit_s: f64,
     laufen: bool,
     rest: usize,
+    /// The inspection map the window asked for; measured on every frame that is sent.
+    karte: Option<Karte>,
     meldungen: Sender<Meldung>,
     ctx: egui::Context,
 }
@@ -316,6 +324,7 @@ impl Lauf {
             rechenzeit_s: self.rechenzeit_s,
             dauer_s,
             fertig: self.fertig,
+            karte: self.karte.and_then(|k| k.messen(&self.szene)),
         }
     }
 
@@ -379,6 +388,12 @@ impl Lauf {
                 self.laufen = false;
                 self.rest = n;
             }
+            Befehl::Karte(k) => {
+                // The map is measured on the frame that is already there, so switching maps shows
+                // the current state at once instead of waiting for the next solver frame.
+                self.karte = k;
+                self.senden(0.0);
+            }
             Befehl::Zuruecksetzen => {
                 self.szene = self.basis.clone();
                 self.rw = ImplizitCg::neu(ImplizitParameter::default());
@@ -399,6 +414,7 @@ impl Lauf {
 fn arbeiten(
     v: Vorgaben,
     a: Anziehen,
+    karte: Option<Karte>,
     befehle: Receiver<Befehl>,
     meldungen: Sender<Meldung>,
     ctx: egui::Context,
@@ -424,6 +440,7 @@ fn arbeiten(
         rechenzeit_s: 0.0,
         laufen: true,
         rest: 0,
+        karte,
         meldungen,
         ctx,
     };
@@ -438,6 +455,11 @@ fn arbeiten(
         return;
     }
     lauf.ctx.request_repaint();
+    // A map chosen before the build is measured on frame 0 as well, so the view has colours
+    // before the first solver frame.
+    if lauf.karte.is_some() {
+        lauf.senden(0.0);
+    }
 
     loop {
         // Between frames: everything that is waiting. Pause and stop act here, so no frame
@@ -486,6 +508,8 @@ pub struct Simulation {
     laeuft: bool,
     /// The scene is built and no run has started yet (frame 0).
     frisch: bool,
+    /// The inspection map the view shows; the worker carries it on every frame.
+    karte: Option<Karte>,
     bildzeiten: VecDeque<f64>,
 }
 
@@ -512,6 +536,7 @@ impl Simulation {
             bereit: false,
             laeuft: false,
             frisch: false,
+            karte: None,
             bildzeiten: VecDeque::with_capacity(BILDZEITEN),
         }
     }
@@ -524,9 +549,10 @@ impl Simulation {
         let (meldung_sender, meldung_empfaenger) = mpsc::channel();
         let ctx = ctx.clone();
         let fuer_faden = vorgaben.clone();
+        let karte = self.karte;
         let faden = thread::Builder::new()
             .name("klon3d-simulation".into())
-            .spawn(move || arbeiten(fuer_faden, a, befehl_empfaenger, meldung_sender, ctx));
+            .spawn(move || arbeiten(fuer_faden, a, karte, befehl_empfaenger, meldung_sender, ctx));
         let Ok(faden) = faden else {
             self.fehler = Some("Simulation: kein Faden für den Löser".into());
             return;
@@ -558,6 +584,22 @@ impl Simulation {
             self.laeuft = false;
             self.frisch = false;
         }
+    }
+
+    /// Show this inspection map, or none; the worker measures it on every frame it sends.
+    ///
+    /// Remembered here as well, so that a map chosen before the scene is built arrives with the
+    /// build (`starten` sends it after `Bereit`).
+    pub fn karte_setzen(&mut self, karte: Option<Karte>) {
+        self.karte = karte;
+        if self.befehle.is_some() {
+            self.befehl(Befehl::Karte(karte));
+        }
+    }
+
+    /// The map selected.
+    pub fn karte(&self) -> Option<Karte> {
+        self.karte
     }
 
     /// Stop the thread and wait for it: at most one solver frame. Called on a pattern change
@@ -596,6 +638,7 @@ impl Simulation {
                         rechenzeit_s: 0.0,
                         dauer_s: 0.0,
                         fertig: false,
+                        karte: None,
                     });
                 }
                 Ok(Meldung::Bild(b)) => {

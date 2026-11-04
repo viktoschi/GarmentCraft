@@ -11,6 +11,7 @@
 //! | [`panele`] | object browser (pieces, seams, fabrics), properties, status bar |
 //! | [`ansicht2d`] | the 2D view and its view math |
 //! | [`ansicht3d`] | the 3D view: wgpu paint callback, orbit camera, vertex data |
+//! | [`karten`] | the inspection maps of the 3D view: strain, fit, distance per point |
 //! | [`simulation`] | the simulation runner: worker thread, commands, snapshots |
 //! | [`dateiwahl`] | folder listing shared by the file dialog and the library; the file dialog |
 //! | [`muster`] | a loaded pattern as plain data, no egui types |
@@ -25,6 +26,7 @@ pub mod bibliothek;
 pub mod dateiwahl;
 pub mod dialoge;
 pub mod fenster;
+pub mod karten;
 pub mod menue;
 pub mod muster;
 pub mod panele;

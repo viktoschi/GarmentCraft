@@ -2,13 +2,58 @@
 
 Task: [#34](https://github.com/viktoschi/klon3d/issues/34) · claimed by `claude-app-1101` ·
 branch `claude/vigilant-babbage-idsu9r` · base `ec76e25` ·
-since 2026-11-03 [#56](https://github.com/viktoschi/klon3d/issues/56) on branch `56-3d`, base `e4dffb8`
+since 2026-11-03 [#56](https://github.com/viktoschi/klon3d/issues/56) on branch `56-3d`, base `e4dffb8` ·
+since 2026-11-03 [#58](https://github.com/viktoschi/klon3d/issues/58) on branch `58-karten`, base `95ff1e5`
 
 This file is the **handoff**: it says what is decided, what is done and which steps remain, so that any
 session – Claude, another agent or a human – can continue without the chat history. Tick a step when it is
 done and committed; update "Status" at the top when you stop.
 
 ## Status
+
+**2026-11-03 – inspection maps in the 3D view, [#58](https://github.com/viktoschi/klon3d/issues/58)**
+(branch `58-karten`, base `95ff1e5`): strain, fit and distance are now painted onto the garment in the
+3D window, with a legend, and `examples/bildschirmfoto.rs --karte` renders any of them headless. New
+module `src/karten.rs`; wired into `ansicht3d.rs` (vertex colours, legend, hover value), `simulation.rs`
+(the worker measures the map), `menue.rs` (Anzeige › 3D-Kleidung and the 3D toolbar), `app.rs`
+(`Aktion::KarteSetzen`, Alt+7/Alt+8) and `dialoge.rs` (two rows in the shortcut table).
+
+* **Who measures** (`karten.rs`): the app does not measure anything. `klon3d-sim` owns the measures
+  (`klon3d_sim::dehnung`, `klon3d_sim::abstand`, `klon3d_sim::farbkarte`) – they are the ones
+  `klon3d anziehen --farben` writes into a coloured OBJ – and the worker calls them on the frame it has
+  just solved. The values travel inside the `Schnappschuss` (`karte: Option<Kartenwerte>`), so the
+  colours always belong to the picture on screen, and measuring the same scene twice gives the same
+  colours as the command line. `ansicht3d` never looks into its own state for the map: the *choice* is
+  a wish, the *values* come with the next snapshot.
+* **The three maps**: `Dehnung` (larger principal strain per point, percent), `Abstand` (distance to the
+  skin, signed, millimetres – needs a body), `Passform` (see the decision table). Scale bounds and unit
+  sit in the legend, the fixed ramp of `farbkarte` is used unchanged, and points outside its bounds show
+  as the ramp's end colour. A point without a body shows `UNGUELTIG` grey on the distance map.
+* **Own definition for "Passform"** (the issue left it open): the map shows, in percent, how much of its
+  tolerance the *worse* of two halves uses – 100 % is the limit, more is a poor fit. The halves are
+  strain against the comfort strain (`dehnung::UEBER_DEHNUNG`, 10 %) and the distance to the skin
+  against `KOMFORT_ABSTAND_MM` (5 mm, an assumption named in the hover text) – the distance by
+  magnitude, because 8 mm of air fits no better than 3 mm pressed in. Without a body only the strain
+  half counts, which is why `Passform` is the one map that works without one. Scale `PASSFORM_VON`/`BIS`
+  = 0/200 %, so the comfort limit sits in the middle of the ramp rather than at its end.
+* **Colours and light**: the shader computes in linear light and the target is sRGB, so the ramp's sRGB
+  bytes are converted once (`Karte::farbe_linear`) before they enter the vertex buffer; without that
+  the fabric looked darker than the legend next to it. A triangle takes the mean of its three corner
+  colours; the body stays grey.
+* **Reading a value**: a pointer over the garment shows the value of the nearest point with its unit in
+  a box beside the pointer (`wert_hinweis`); the legend sits bottom left with the ramp, its bounds and
+  the map's one-line explanation, in both themes.
+* **Switching**: only one map at a time; choosing the active one again turns it off
+  (`Aktion::KarteSetzen(Option<Karte>)`). Alt+7 and Alt+8 for strain and fit, distance only in the
+  menus – the two shortcuts are the ones CLO gives its Strain Map and Fit Map in the Fit Maps menu.
+  All three buttons stay enabled without a run – the choice is remembered and arrives with the next
+  snapshot.
+* Tests: five in `tests/karten.rs` (strain, distance and fit point by point against `klon3d-sim` for
+  a tube on a cylinder, the fit definition, the fallback without a body, the vertex colours), plus the
+  updated `tests/ansicht3d.rs`, `tests/fensteranordnung.rs` and `tests/oberflaeche.rs`; three unit tests
+  in `karten.rs` and one in `ansicht3d.rs` (a triangle averages its own three corners' colours).
+  `cargo test -p klon3d-app`: 124 tests, 0 failed, 4 ignored. `cargo test --locked --workspace
+  --exclude klon3d-view --no-fail-fast`: 483 passed, 0 failed, 44 ignored.
 
 **2026-11-03 - 3D view and simulation, [#56](https://github.com/viktoschi/klon3d/issues/56)** (branch
 `56-3d`, base `e4dffb8`): the 3D window now draws the body and the cloth, and the solver runs from the
@@ -44,10 +89,10 @@ Both are wired into `app.rs` (state, `Aktion`s, `vorgaben`, `gpu_erfassen`, end 
 * **What is disabled, and why**: the three simulation entries are free only when
   `simulation::hindernis` finds nothing missing; otherwise they are greyed out and the hover text names
   the file (e.g. "Lagedatei fehlt: ..."). "Zurücksetzen" needs a running simulation. "Anordnen" and
-  "Netzauflösung..." stay for a later task, the maps too.
+  "Netzauflösung..." stay for a later task.
 * **Not here** (named in the PR of #56): the solver still has no `mit_geraet(device, queue)`, so the SIM
-  side runs on the CPU; the GPU path would need its own wgpu instance. The exporter and the maps are
-  #57 and #58.
+  side runs on the CPU; the GPU path would need its own wgpu instance. The exporter and the maps came
+  with #57 and #58.
 * Tests: unit tests of both modules (`ansicht3d`, `simulation`), and `tests/simulation.rs` +
   `tests/ansicht3d.rs` next to the updated `tests/oberflaeche.rs` and `tests/fensteranordnung.rs`;
   `examples/bildschirmfoto.rs --simulieren <bilder>` renders the 3D view to `bilder/simulation_3d.png`
@@ -398,7 +443,7 @@ nested `egui::Panel` stores its size from the first frame, which can be tiny –
 First slice of stage 6 in PLAN.md: an `eframe` window with the `wgpu` renderer and the layout the user asked
 for on 2026-10-20 – **dark design** (switchable to light, saved), **menus**, **buttons** – working on the
 2D pattern. The 3D view, the simulation, fabric and body came with #56 (2026-11-03), OBJ/DXF export
-with #57; the maps are a later task (#58) and their menu entries are still disabled.
+with #57, the strain, fit and distance maps with #58 (2026-11-03).
 
 ## Decisions
 
@@ -413,6 +458,10 @@ with #57; the maps are a later task (#58) and their menu entries are still disab
 | Not touched | `PLAN.md` (held by #33), `klon3d-view` (stays the Win32 diagnostic tool) | |
 | Window arrangement (2026-11-02) | layout, menu order and shortcuts follow CLO's visible arrangement where klon3d has the function (3D left, 2D right, library left, object browser and properties right); labels are our own German words; entries for later functions exist but are disabled | users who know CLO find things where they expect them; nothing of CLO's program goes into the repository (AGENTS.md) |
 | Stored settings | short `name=wert` texts per key in eframe's storage, read forgivingly | an older or damaged state must never stop the start; no serde dependency |
+| "Passformkarte" (2026-11-03, #58) | percent of the tolerance used by the worse of two halves: strain against `UEBER_DEHNUNG` (10 %), distance to the skin by magnitude against `KOMFORT_ABSTAND_MM` (5 mm); 100 % = limit; without a body only the strain half | the issue left the term open; a single number that says "is this point still wearable" is what a fit map is for, and taking the worse half never hides a problem behind a good one |
+| Maps measured in the worker (#58) | the values travel in the `Schnappschuss`, the view only paints them | colours then belong to the frame on screen, and the same scene gives the same colours as `klon3d anziehen --farben` |
+| Fixed map scales (#58) | the ramp of `klon3d_sim::farbkarte` unchanged, bounds printed in the legend | a scale normalised per run makes every run look equally bad and a colour mean nothing |
+| sRGB → linear once (#58) | the ramp's bytes are converted in `Karte::farbe_linear` before they reach the vertex buffer | the shader computes in linear light, the target is sRGB; without it the fabric was darker than its own legend |
 
 ## Planned layout of the crate
 
@@ -429,8 +478,9 @@ with #57; the maps are a later task (#58) and their menu entries are still disab
 | `src/dialoge.rs` | floating windows: file dialog, error, help (shortcuts, about), Informationen, Netzprüfung (#46), drop hint |
 | `src/muster.rs` | (6c) also each piece's grainline (`Teil::fadenlauf`, `fadenlauf_fehler`) and the seam suggestion `naehte_vorschlagen` (seam list text, numbers of `klon3d naehte --vorschlag`); (6f) `dxf_ausgabe` (bytes through `Muster::dxf_teile` + `klon3d_pipeline::dxf::schreibe`, the same preparation the command line uses) and `obj_aus_muster` (the flat mesh as `klon3d netz --obj` writes it, one comment line more); loading without UI: `.sm2d` → `Auswertung` → piece outlines (`ev.stueck_umriss`), circumference (`ev.umriss_laenge`), boundary edges (`ev.teilrand(stueck, Kurvenquelle::Seamly)`), seam report (`naehte::lies_nahtliste` + `pruefe_naehte`, the same numbers as `klon3d naehte`); measurement file as the pattern names it (see `klon3d-view/src/main.rs`, `Blatt::laden`) or chosen by hand |
 | `src/ansicht2d.rs` | 2D view: pieces laid out side by side (as `klon3d-view` `auslegen`), pan, zoom around the cursor, fit, hit test, selection highlight, seams, edge lengths, scale bar; (6c) grainlines with arrow heads (`pfeilspitzen`) and notch ticks (`passzeichen`) |
-| `src/ansicht3d.rs` | (#56) 3D view: `Ansicht3d` (orbit camera, five `Blickwinkel`, fit, wireframe switch), the vertex data built from a `Bau` + snapshot by hand, two `egui_wgpu` pipelines (triangles, edges) and the WGSL shader as a `const`; without a target format only the hint text |
-| `src/simulation.rs` | (#56) the solver in its own thread: `Vorgaben` (pattern, measurement file, material, optional body) with `hindernis`, the unrolled construction from `klon3d-mcp`, `Befehl`/`Meldung` channels, `Schnappschuss` and `Bau` for the view |
+| `src/ansicht3d.rs` | (#56) 3D view: `Ansicht3d` (orbit camera, five `Blickwinkel`, fit, wireframe switch), the vertex data built from a `Bau` + snapshot by hand, two `egui_wgpu` pipelines (triangles, edges) and the WGSL shader as a `const`; without a target format only the hint text. (#58) per-vertex colours of a selected map, the legend, and the value under the pointer |
+| `src/simulation.rs` | (#56) the solver in its own thread: `Vorgaben` (pattern, measurement file, material, optional body) with `hindernis`, the unrolled construction from `klon3d-mcp`, `Befehl`/`Meldung` channels, `Schnappschuss` and `Bau` for the view; (#58) `Befehl::Karte` and the map measured on each frame |
+| `src/karten.rs` | (#58) the three inspection maps: `Karte` (name, title, unit, scale, explanation, whether it needs a body), `messen(&Szene)` calling `klon3d-sim`, the fit definition, the ramp bytes and their sRGB → linear conversion. No egui type inside, so the module stays testable headless |
 | `src/dateiwahl.rs` | folder listing `Verzeichnis` (shared with the library) and the modal file dialog; (6c) save mode (`Zweck::NahtlisteSpeichern`: file name field, question before overwriting); (6f) the same for `Zweck::ObjSpeichern` and `Zweck::DxfSpeichern` |
 | `tests/gemeinsam/mod.rs` | helpers of the UI tests: windows, independent Bluse3 evaluation, grid rows, menus, storage |
 | `tests/oberflaeche.rs` | kittest: pieces and seams against `pruefe_naehte`, selection, theme, menus and their disabled entries, shortcuts, file dialog, drag and drop, measurement file choice, minimum size, all test patterns |
@@ -440,7 +490,8 @@ with #57; the maps are a later task (#58) and their menu entries are still disab
 | `tests/simulation.rs` | (#56) the solver from the window without one: `hindernis` names the missing file, start with short `Anziehen` values, at least two frames with moved points, hold (frame number stays), one single step adds exactly one frame, reset gives the start positions back bit for bit; after two frames the positions equal a run of `klon3d_pipeline::ablauf` made directly (1e-9, release), and twenty drawn frames while the solver works stay under 50 ms (release) |
 | `tests/ansicht3d.rs` | (#56) the camera without a GPU: five distinct `Blickwinkel`, `kamera_text`, `ist_blickwinkel`, and `Ansicht3d::ui` with `format: None` showing the hint and the canvas role "3D-Ansicht" |
 | `tests/export.rs` | kittest (6f): Export entries disabled without a pattern (hover text), DXF bytes equal to `Muster::dxf_teile` + `dxf::schreibe` (what `klon3d dxf` calls) with the piece count in the status bar, OBJ without a simulation with as many `v` lines as the pattern mesh and "ohne Simulation" in the file, OBJ after a short run with as many `v` lines and groups as the placed scene (release, skipped without CLO's body folder), the overwrite question for both (Nein keeps the dialog and the file, Überschreiben writes), the dialog starting in the pattern's folder |
-| `examples/bildschirmfoto.rs` | renders the window with kittest's wgpu renderer to PNG, no window and no focus taken (`--muster`, `--aus`, `--breite`, `--hoehe`, `--massstab`, `--dunkel`/`--hell`; #56 `--simulieren <bilder>` runs the solver and shows the 3D view). kittest prefers a software adapter, so the status bar shows e.g. "Microsoft Basic Render Driver" – not the GPU the app uses |
+| `tests/karten.rs` | (#58) the maps the window paints are the maps of `klon3d-sim`: strain, distance and fit per cloth point bit for bit against `dehnung`/`abstand` for a tube on a cylinder, the fit definition (worse half, 100 % at the comfort limit, strain half alone without a body), the vertex colours as the fixed ramp through the sRGB curve exactly once |
+| `examples/bildschirmfoto.rs` | renders the window with kittest's wgpu renderer to PNG, no window and no focus taken (`--muster`, `--aus`, `--breite`, `--hoehe`, `--massstab`, `--dunkel`/`--hell`; #56 `--simulieren <bilder>` runs the solver and shows the 3D view; #58 `--karte dehnung|passform|abstand|keine` – only together with `--simulieren`). kittest prefers a software adapter, so the status bar shows e.g. "Microsoft Basic Render Driver" – not the GPU the app uses |
 
 Menu bar (step 7b; `[s]` = disabled, a later task): **Datei** (Neu Strg+N [s], Öffnen… Strg+O,
 Zuletzt geöffnet ›, Hinzufügen › Maßdatei… / Nahtliste…, Speichern Strg+S [s], Speichern unter…
@@ -454,7 +505,7 @@ vorschlagen… (6c)) ·
 **Materialien** (Stoff zuweisen… (#56, `.zfab`), Stoffbibliothek) · **Avatar** (Körper laden… (#56,
 `.zprj`), Maßdatei wählen…, Avatar anzeigen Umschalt+A [s], Maße am Körper [s]) · **Anzeige**
 (Blickwinkel › Vorne / Hinten / Links / Rechts / Oben + Einpassen (#56), 3D-Kleidung › Netz (#56) /
-Dehnungskarte [s] / Passformkarte [s] / Abstandskarte [s], 2D-Schnitt › Nähte / Längen / Teilnamen /
+Dehnungskarte (#58, Alt+7) / Passformkarte (#58, Alt+8) / Abstandskarte (#58), 2D-Schnitt › Nähte / Längen / Teilnamen /
 Maßstab / Fadenlauf / Passzeichen (6c), Avatar › [s], Fenster ›
 five areas + Fenster wechseln Strg+Tab, Werkzeugleisten › three toolbars, Anordnung zurücksetzen) ·
 **Einstellungen** (Design › Dunkel / Hell, Sprache › Deutsch / English [s]) · **Hilfe** (Tastenkürzel,
@@ -495,6 +546,11 @@ last message.
       `tests/fensteranordnung.rs`), `bilder/simulation_3d.png` from `examples/bildschirmfoto.rs
       --simulieren`, this file. Not here and named in the PR: the solver has no `mit_geraet`, so it
       runs on the CPU; no OBJ/DXF export and no maps (#57, #58)
+- [x] 13. #58 (2026-11-03, branch `58-karten`, base `95ff1e5`): `karten.rs` (three maps, fit definition,
+      ramp → linear), the map measured in the worker (`Befehl::Karte`, `Schnappschuss.karte`), vertex
+      colours, legend and hover value in `ansicht3d.rs`, menus and the two shortcuts (Alt+7/Alt+8),
+      `--karte` in `examples/bildschirmfoto.rs`, tests (`tests/karten.rs`, updated `ansicht3d`,
+      `fensteranordnung`, `oberflaeche`), this file.
 
 ## Environment
 
@@ -536,6 +592,17 @@ The example runs the solver through the app's own path (`App::simulation_starten
 requested number of frames and renders the window with kittest's wgpu renderer; release matters, a debug
 frame takes about 15 s instead of 260-350 ms. kittest may pick a software adapter, the 3D callback runs
 on whatever device the harness hands over.
+
+A map on that picture (#58): `--karte` needs `--simulieren`, because the map is measured in the worker
+on a solved frame. Both designs show the legend, and a light picture proves the legend's ramp and the
+fabric's colours are the same ramp. The two commands below are quick smoke runs; the six committed
+pictures `bilder/karte_{dehnung,passform,abstand}_{dunkel,hell}.png` use `--simulieren 200` (the end of
+the sewing phase) – at 2 frames the strain is still near zero and every map stays dark blue:
+
+```pwsh
+cargo run --release -p klon3d-app --example bildschirmfoto -- --muster ../../crates/klon3d-pattern/tests/muster/bluse3_v2.sm2d --simulieren 2 --karte dehnung --aus bilder/karte_dehnung_dunkel.png
+cargo run --release -p klon3d-app --example bildschirmfoto -- --muster ../../crates/klon3d-pattern/tests/muster/bluse3_v2.sm2d --simulieren 2 --karte passform --hell --aus bilder/karte_passform_hell.png
+```
 
 ## Handing over
 
