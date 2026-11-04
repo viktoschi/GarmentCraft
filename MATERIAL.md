@@ -167,5 +167,14 @@ material model is confirmed.
   sleeve cap stand off?) it is exactly the decisive parameter — see
   `PARITY.md`, row "Tack spring for stickiness".
 - **Curve:** five sample points with scatter, units not stored in the file.
-- The fabric files are **not yet used in the solver**; a `.zfab` reader
-  so far exists only as a Python tool (`../latex-stoffe/werkzeug/zprj_stoffe.py`).
+- **The files are read and reach the solver.** Two steps, kept apart on
+  purpose: `crates/klon3d-pattern/src/zfab.rs` parses a `.zfab` into `Zfab`
+  (container, head, property stream; a field the file does not state stays
+  `None`), checked against `../latex-stoffe/werte/latex_profile.csv` by
+  `crates/klon3d-pattern/tests/zfab.rs`. `crates/klon3d-pipeline/src/stoff.rs`
+  then converts that to `klon3d_sim::Material` and *demands* the six values the
+  solver needs, because it cannot run on "not stated". An open point is the
+  rest: `Zfab` carries more than `Material` holds (warp/bias bending, buckling,
+  damping), and none of it is used yet - the solver takes the weft values only.
+  The nonlinear curves stay unread
+  (§ "The CLO fields and their latex values").

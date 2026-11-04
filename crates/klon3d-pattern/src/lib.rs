@@ -45,6 +45,7 @@ pub mod saumkontur;
 pub mod smis;
 pub mod vorschlag;
 pub mod zip;
+pub mod zfab;
 pub mod zprj;
 
 pub use formula::{eval_str, Context, Expression, FormulaError, MapContext};
@@ -56,6 +57,7 @@ pub use parse::{read_path, read_str};
 pub use smis::{lies_smis, lies_smis_str, Einheit, Smis};
 pub use geom::{Auswertung, Pt};
 pub use zprj::{Naht, Nahtseite, Projekt, Punkt2, Punkt3, Stoff, Teil, ZprjFehler};
+pub use zfab::{Zfab, ZfabFehler};
 
 /// Fehler beim Laden einer Musterdatei.
 #[derive(Debug, thiserror::Error)]

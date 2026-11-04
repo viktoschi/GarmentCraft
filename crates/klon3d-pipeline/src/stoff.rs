@@ -1,11 +1,12 @@
 //! Fabrics from CLO `.zfab` files for the solver.
 //!
-//! A `.zfab` is a 16 byte header (`" FAB        CLO "`), a preview image and
-//! then a ZIP archive. Inside the archive sits a single `.fab` file: a
-//! property stream **without** a header, its map block starting at byte 0.
-//! The archive reader finds the offset of the ZIP behind the header by
-//! itself ([`klon3d_pattern::zip::Archiv`] measures it from the central
-//! directory), so the whole file is handed over as it is.
+//! The file itself is read by [`klon3d_pattern::zfab`] - container, head and
+//! property stream live there, together with the test table of all eight
+//! files. This module is the **second step only**: it maps a parsed
+//! [`Zfab`] onto the SI [`Material`] the solver needs, and it is the place
+//! that *demands* a value. A field the file does not state is an error here,
+//! because the solver cannot run on "not stated" - the parser keeps it as
+//! `None` instead of inventing a zero.
 //!
 //! The numbers live in `mapPhysical`; the field names and units are the ones
 //! CLO's Property Editor shows ([`MATERIAL.md`], which also lists the values
@@ -32,14 +33,10 @@ use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::sync::{Mutex, OnceLock};
 
-use klon3d_pattern::property::{self, Map};
-use klon3d_pattern::zip::Archiv;
+use klon3d_pattern::zfab::Zfab;
 use klon3d_sim::Material;
 
 use crate::Fehler;
-
-/// First 16 bytes of every `.zfab`: type code, spaces, `CLO`.
-const KOPF_MAGIC: &[u8] = b" FAB        CLO ";
 
 /// The error of this module carries the file it is about.
 fn fehler(pfad: &Path, was: &str) -> Fehler {
@@ -93,69 +90,33 @@ pub fn stoffe_im_ordner(ordner: &Path) -> Vec<(PathBuf, Result<Material, Fehler>
 /// The mapping itself, from the bytes of a `.zfab`. `stamm` is the name the
 /// [`Material`] gets, `pfad` only labels the error message.
 fn aus_bytes(daten: &[u8], stamm: &str, pfad: &Path) -> Result<Material, Fehler> {
-    // Head and container: the 16 byte magic, then `u32[0x20]` (start of the
-    // ZIP) + `u32[0x24]` (its length) must add up to the file size. A file
-    // cut short fails here, before anything is read out of it.
-    if daten.len() < 0x28 || &daten[..16] != KOPF_MAGIC {
-        return Err(fehler(
-            pfad,
-            "kein .zfab-Kopf (16 Byte \" FAB        CLO \")",
-        ));
-    }
-    if !property::hat_kopf(daten) {
-        return Err(fehler(
-            pfad,
-            "Kopf passt nicht zur Dateigröße (Datei abgeschnitten?)",
-        ));
-    }
+    // The parser names its own failure (head, ZIP, `.fab`, completeness); the
+    // caller only adds the file it was reading.
+    let z = Zfab::lies_bytes(daten, &pfad.display().to_string())
+        .map_err(|e| fehler(pfad, &e.to_string()))?;
+    aus_zfab(&z, stamm, pfad)
+}
 
-    let archiv = Archiv::neu(daten).map_err(|e| fehler(pfad, &format!("ZIP: {e}")))?;
-    let fab = archiv
-        .lies_mit_endung(".fab")
-        .map_err(|e| fehler(pfad, &format!(".fab im Archiv: {e}")))?;
-
-    // The `.fab` has no header: the map block starts at byte 0 and has to end
-    // on the last byte, exactly as the `.pac` of a project does.
-    let mut leser = property::Leser::neu(&fab).mit_pfad("zfab");
-    let wurzel = leser
-        .map(None)
-        .map_err(|e| fehler(pfad, &format!(".fab: {e}")))?;
-    if leser.rest() != 0 {
-        return Err(fehler(
-            pfad,
-            &format!(".fab endet {} Byte vor dem Dateiende", leser.rest()),
-        ));
-    }
-
-    let physik = wurzel
-        .pfad_map(&["mapPhysical"])
-        .ok_or_else(|| fehler(pfad, "mapPhysical fehlt"))?;
-
+/// Maps a parsed fabric onto the solver's SI material.
+///
+/// Every value is demanded: a file that does not state its thickness is an
+/// error naming the field, not a material with a zero in it.
+fn aus_zfab(z: &Zfab, stamm: &str, pfad: &Path) -> Result<Material, Fehler> {
     Ok(Material {
         name: name_static(stamm),
-        dehnung_n_m: zahl(physik, "fSuK", pfad)? * 1.0e-3,
-        schub_n_m: zahl(physik, "fHK", pfad)? * 1.0e-3,
-        biegung_nm: zahl(physik, "fBuK", pfad)? * 1.0e-9,
-        flaechengewicht_kg_m2: zahl(physik, "fDensity", pfad)? * 1.0e3,
-        dicke_m: zahl(physik, "fThickness", pfad)? * 1.0e-3,
-        reibung: zahl(physik, "fFriction", pfad)?,
+        dehnung_n_m: pflicht(z.stretch_weft_g_s2, "fSuK", pfad)? * 1.0e-3,
+        schub_n_m: pflicht(z.shear_g_s2, "fHK", pfad)? * 1.0e-3,
+        biegung_nm: pflicht(z.bending_weft, "fBuK", pfad)? * 1.0e-9,
+        flaechengewicht_kg_m2: pflicht(z.dichte_g_mm3, "fDensity", pfad)? * 1.0e3,
+        dicke_m: pflicht(z.dicke_mm, "fThickness", pfad)? * 1.0e-3,
+        reibung: pflicht(z.reibung, "fFriction", pfad)?,
     })
 }
 
-/// One `f32` field of `mapPhysical`; a missing or differently typed field is
-/// named rather than replaced by a default.
-fn zahl(physik: &Map, feld: &str, pfad: &Path) -> Result<f64, Fehler> {
-    physik
-        .feld(feld)
-        .and_then(|w| w.als_blatt())
-        .and_then(|b| b.als_f32())
-        .map(f64::from)
-        .ok_or_else(|| {
-            fehler(
-                pfad,
-                &format!("mapPhysical.{feld} fehlt oder ist keine f32"),
-            )
-        })
+/// One field the material cannot do without; a missing one is named rather
+/// than replaced by a default.
+fn pflicht(wert: Option<f64>, feld: &str, pfad: &Path) -> Result<f64, Fehler> {
+    wert.ok_or_else(|| fehler(pfad, &format!("mapPhysical.{feld} fehlt oder ist keine f32")))
 }
 
 /// [`Material::name`] is `&'static str` and `Material` is `Copy`; the name
@@ -176,3 +137,4 @@ fn name_static(name: &str) -> &'static str {
     karte.insert(name.to_owned(), n);
     n
 }
+
