@@ -98,7 +98,7 @@ Formula engine: lexer, recursive descent, QMuParser dialect, 9 tests green.
 | L036 (third-party, mm) | the only pattern with `trueDarts`, `cubicBezier`, `cubicBezierPath` and formulas on axis sub-curves; checked with a synthetic body against Seamly2D's export (`tests/l036_seamly.rs`, skips without the pattern) | **#42, finding 123**: all 204 named points within 7e-5 mm of Seamly2D (probe pieces, one per point), 4 of 5 seam lines ≤ 0.08 mm. **Since #49 all five** within 0.001 mm in both directions: the seam line is cleaned like Seamly2D's `mainPathPoints` (`schleifen.rs`: near duplicates, spikes and loops out; the centre back of "L036 - back" overlaps itself, 2294.16 instead of 2727.4 mm). Node points keep their place, and nodes inside a removed loop drop out of the edges |
 | Seam line cleanup | `schleifen.rs`, called from `kontur.rs`; points of point nodes are fixed, a node in a removed loop is dropped from the boundary edges (`kanten.rs`) instead of leaving an edge of length zero | **#49**: synthetic cases (backtracking run, figure eight, spike, near duplicates, fixed points, a piece with loop nodes); Bolero v37 and stocking v26 still match Seamly2D's export; workspace tests green |
 | `idObject` resolution | piece nodes → outline paths | piece outlines close |
-| Seam allowance | `seamAllowance` bool, `width` as a formula, `<CSA>` | width computable, but it is a **run along the edge**, not one value - arithmetic built (`nahtzugabe.rs`, #70) and wired into the DXF export as the piece's cutting line (`saumkontur.rs`, #78, findings 132, 133, see Stage 3) |
+| Seam allowance | `seamAllowance` bool, `width` as a formula, `<CSA>` | the allowance is a **run along the edge**, not one value: arithmetic `nahtzugabe.rs` (#70), the contour from a piece's edges `saumkontur.rs` (#74), both with tests (findings 132, 133, see Stage 3). Drawn by the DXF export (#78), the 2D view (#80) and `klon3d umriss` (#82); the mesh does not draw it |
 
 **Acceptance criterion:** the piece outlines of 10 patterns match `schnitt.py
 piece_outline`.
@@ -280,7 +280,7 @@ new modelling, and CLO's own field set has no columns for the arcs either.
 | Part | Content | Status |
 |---|---|---|
 | **Boundary edges** | seam line per piece split at the point nodes, length, notches, seam allowance per edge (`kanten.rs`) | **done** (finding 32) |
-| **Seam allowance contour** | the allowance is not one width per piece: the seam line is offset **point by point** by the allowance, with a run along the edge - no offset polygon, no self-intersection clean-up (`kanten.rs` keeps only `before`/`after` per node) | **done** for the DXF export (`saumkontur.rs` #74 joins edges and arithmetic, `Muster::dxf_teile` writes the result as the piece's cutting line on layer 8, #78; findings 132, 133). Reconstruction from `kanten.rs` alone, `Ecken::Eigen`; the `<CSA>` paths and the line's own stored direction are still approximations |
+| **Seam allowance contour** | the allowance is not one width per piece: the seam line is offset **point by point** by the allowance, with a run along the edge - no offset polygon, no self-intersection clean-up (`kanten.rs` keeps only `before`/`after` per node) | **readable from a piece and drawn** (`nahtzugabe.rs`, #70; `saumkontur.rs`, #74): `Saumkontur::aus_teilrand(&Teilrand, Ecken)`, tests `tests/saumkontur.rs`. Three callers take it: the DXF export as the piece's second closed line on layer 8 (`Muster::dxf_teile`, #78), the 2D view (#80) and `klon3d umriss` (#82). Reconstruction from `kanten.rs` alone, `Ecken::Eigen`; not modelled are the `<CSA>` paths, the line's own stored direction and finding 135's outer/inner split |
 | **Seam assignment** | seam list `<pattern>.naehte` next to the pattern: sides made of whole boundary edges, 1:1 up to M:N; `klon3d naehte` checks lengths, notches, coverage (`naehte.rs`) | **done** (finding 32); **seam suggestion** `klon3d naehte --vorschlag` (finding 101): Bluse3, Bluse1, bustier and skirt edge for edge like the hand-written list, direction and mirroring from the seam graph; open: pleats (bolero), slits |
 | **Triangulation** | seam line → triangle mesh per piece, approx. 10 mm edge length: boundary split by curvature, ear clipping, Lawson, Ruppert with a minimum angle of 25°, smoothing; exact on an integer grid (`klon3d-mesh`) | **done** (finding 33) |
 | **Subdivision** | subdivide both seam partners equally by **length fraction** as in CLO (§4 of the specification), point nodes of both sides merged up to 2 mm; result: point pairs per sub-seam; `klon3d netz` | **done** (finding 33) |
@@ -350,10 +350,10 @@ Style3D's solver; the form of the rule carries over, the numbers do not.
 darts as seam sides, an automatic seam list as a suggestion.
 
 **How the reference computes the seam allowance** (findings 132, 133) - read;
-the arithmetic is rebuilt in `crates/klon3d-pattern/src/nahtzugabe.rs` (#70,
-PR #72), joined to the piece edges in `saumkontur.rs` (#74) and written as the
-cutting line by the DXF export (#78). The allowance is a **run along the arc
-length**, not a constant:
+the arithmetic is rebuilt in `crates/klon3d-pattern/src/nahtzugabe.rs` (#70),
+`saumkontur.rs` (#74) joins it to a piece's edges, and three callers draw the
+result (#78 DXF, #80 2D view, #82 command line). The allowance is a **run along
+the arc length**, not a constant:
 
 ```
 S   = Σ |P_k − P_{k−1}|          polyline length, without the offset
@@ -386,17 +386,48 @@ the distributor, read by the contour and by the length check). Both live in the
 seam line's **common entry point**, which five line classes share - a class of its
 own does not exist, and none of the four candidate classes reaches the contour.
 
-**In klon3d the arithmetic exists and is wired into the export.** `nahtzugabe.rs` has
-the run (`verlauf`), the crossed 0.5 averaging (`startwert`/`endwert`) and the contour
-(`kontur`), 15 tests with the numbers of the findings. `kanten.rs` holds two values per
-point node (`before`/`after`) and reports edges that carry an allowance without a seam.
-`saumkontur.rs` (#74) joins both: it turns a `Teilrand` into the displaced segments and
-takes the outward normal per chord from the winding of the seam line - the direction the
-findings leave to the line data. `Muster::dxf_teile` (#78) calls it and writes the result
-as the piece's second, closed line on layer 8; `klon3d dxf` prints both lengths. Not
-modelled: the `<CSA>` paths that replace the allowance between two nodes, and the way the
-reference steps at a corner where both sides carry an allowance (we average, it mitres -
-5.05 mm on the skirt's waistband, documented as a limit, not fixed).
+**In klon3d the arithmetic and the joint exist, and three callers take it.**
+`nahtzugabe.rs` (#70) has the run (`verlauf`), the crossed 0.5 averaging
+(`startwert`/`endwert`) and the contour (`kontur`), 15 tests with the numbers
+of the findings. `saumkontur.rs` (#74) is the joint between that and a piece:
+`Saumkontur::aus_teilrand(&Teilrand, Ecken)` builds one edge entry per segment
+of the seam line, runs `verlauf` over each edge of at least four segments and
+returns the displaced segments, 7 tests. Three callers read it: the DXF export
+writes the result as the piece's second, closed line on layer 8 (`Muster::
+dxf_teile`, #78, and `klon3d dxf` prints both lengths), the 2D view draws it
+(#80), and `klon3d umriss` prints its length and draws it under `--svg` (#82).
+The mesh does not; it still carries the seam line only.
+
+Three decisions live in `saumkontur.rs` and are assumptions, not findings:
+
+- The direction of the contour is **not** read from the piece, because the
+  findings do not say where the reference's stored direction points. It is
+  taken as the **outward normal of each segment's chord**, with the outside
+  from the sign of the signed area of the seam line - so a piece wound either
+  way is offset outwards.
+- A point node carries two values (`before`/`after`) and the contour one, so
+  `Ecken` decides: `Eigen` keeps `after` (a free edge with `after = 0` stays
+  free), `Gekreuzt` the blend `mitte(vor, nach)`. The crossed 0.5 of the
+  reference is a blend across two neighbouring corners, which one value per
+  node does not have. All three callers pass `Eigen`.
+- The **step at a node whose two values differ** - a middle edge that skips the
+  run ends at its own value while the next edge starts lower - is not modelled.
+  Our answer is the average, the reference mitres: 5.05 mm on the skirt's
+  waistband, documented as a limit, not fixed.
+
+What still has no counterpart is the reference's plumbing: the two markers on
+the run (the one-shot gate and *the run is computed*) and the dispatch through
+the seam line's common entry point. In klon3d the contour is a pure function of
+a `Teilrand`, and each consumer decides for itself whether it draws the **seam
+line** or the **contour**. The DXF writer, for instance, puts the seam line on
+layer 1 on purpose, because for latex the overlapped edge *is* the seam line.
+The `<CSA>` paths that replace the allowance between two nodes have no
+counterpart either.
+
+Finding 135 adds a distinction klon3d does not carry: the reference keeps an
+**outer** and an **inner** seam allowance apart, same computation, different
+marker, and only the outer one runs through the general branch. klon3d has one
+allowance per node, which is the outer one.
 
 **Meshes in the viewer:** `klon3d netz --svg` draws meshes and
 seam points, `--obj` writes them; `klon3d-fenster` does not show them yet.
@@ -894,10 +925,10 @@ per stage:
 
 | Stage | needed for fabric | Status |
 |---|---|---|
-| 1 Pattern reading | grainline per piece: read Seamly2D `<grainline>` (position, rotation), otherwise a fixed piece axis | open; the reader skips `<grainline>` |
-| 3 Mesh | carry the grainline into the mesh (direction per triangle); sewn seam with the seam allowance turned inward instead of an overlap seam; glue zone = fusible interfacing | open |
+| 1 Pattern reading | grainline per piece: read Seamly2D `<grainline>` (position, rotation), otherwise a fixed piece axis | **done** (`fadenlauf.rs`, #10): visible grainlines only, formula values in the pattern unit, anchored ones normalised into the seam line's box. Carried into the mesh since #88: `Teilnetz::fadenlauf` in mm in the net's own frame, and `klon3d netz --svg` draws the axis with the arrow tips; an unreadable grainline is a message in `Musternetz::fehler`, never a lost piece. A **direction per triangle** is still open |
+| 3 Mesh | carry the grainline into the mesh (direction per triangle); sewn seam with the seam allowance turned inward instead of an overlap seam; glue zone = fusible interfacing | open; the grainline is an axis per piece, not yet a direction per triangle |
 | 4 Solver | **anisotropic material**: warp, weft and shear separate; for this a **triangle continuum** instead of edge springs (those have ν = 1/3 and no independent shear); noticeable, direction-dependent bending; **self-collision** and layers, because fabric falls into folds | open; edge springs isotropic; self-collision since finding 116 (switch, CPU), layers missing |
-| Material | `.zfab` reader in Rust, values from CLO's fabric library (ADR-015), no measurements of our own | open; only the Python reader |
+| Material | `.zfab` reader in Rust, values from CLO's fabric library (ADR-015), no measurements of our own | **read** (`klon3d-pattern/src/zfab.rs`, #83): one reader for both containers, the CLO-fabric mapping lives in `klon3d-pipeline`; `anziehen --material` (#85) and `roehre --material` (#87) pick a `.zfab` by path or by a stem from `assets/stoffe`, through one shared resolution |
 | 5 Inspection output | drape and folds; comparison against CLO with the same fabric, draping and fitted reported separately (already specified) | open |
 
 **Acceptance case for fabric:** a fabric pattern from Seamly2D chosen by the user,
