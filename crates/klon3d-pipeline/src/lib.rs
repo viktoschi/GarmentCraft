@@ -40,6 +40,7 @@ use klon3d_koerper::anordnung_clo::{aus_clo_koerper, CloNummern};
 use klon3d_pattern::geom::{lies_messungen, Auswertung};
 use klon3d_pattern::kanten::Kurvenquelle;
 use klon3d_pattern::naehte::{lies_nahtliste, pruefe_naehte};
+use klon3d_pattern::saumkontur::{Ecken, Saumkontur};
 use klon3d_pattern::Pattern;
 use klon3d_sim::netzkoerper::{clo_nach_szene, SUCHTIEFE};
 use klon3d_sim::platzierung::{lies_lage, platziere_mit, Huellen, Koerperteile};
@@ -208,11 +209,34 @@ impl Muster {
 
             let (knoten, offene) = ev.stueck_knoten(t);
             let kante = dxf::bereinige(ev.umriss_aus_knoten(&knoten).into_iter().map(nach_dxf));
+            // The cutting line: the seam line displaced by the allowance of its nodes, which is
+            // what Seamly writes on its own second layer. A piece without allowance keeps one
+            // line; its contour would only be a copy of the seam line.
+            let kontur = ev
+                .teilrand(t, Kurvenquelle::Seamly)
+                .ok()
+                .filter(|r| {
+                    r.punktknoten
+                        .iter()
+                        .any(|k| k.zugabe_nach.unwrap_or(0.0) > 0.0)
+                })
+                .map(|r| {
+                    // `punkte()` repeats both ends of every segment; the ring must not.
+                    let mut pts: Vec<klon3d_pattern::Pt> = Vec::new();
+                    for p in Saumkontur::aus_teilrand(&r, Ecken::Eigen).punkte() {
+                        if pts.last().map_or(true, |q| q.dist(*p) > 1e-9) {
+                            pts.push(*p);
+                        }
+                    }
+                    dxf::bereinige(pts.into_iter().map(nach_dxf))
+                })
+                .filter(|k| k.len() >= 3);
             if kante.len() < 3 {
                 out.push(Dxfteil {
                     teil: dxf::Teil {
                         name,
                         kante,
+                        kontur: None,
                         kerben: Vec::new(),
                     },
                     uebergangen: true,
@@ -247,7 +271,7 @@ impl Muster {
                 }
             }
             out.push(Dxfteil {
-                teil: dxf::Teil { name, kante, kerben },
+                teil: dxf::Teil { name, kante, kontur, kerben },
                 uebergangen: false,
                 offene,
                 daneben,
@@ -258,11 +282,23 @@ impl Muster {
         let alle: Vec<dxf::P> = out
             .iter()
             .filter(|t| !t.uebergangen)
-            .flat_map(|t| t.teil.kante.iter().copied())
+            .flat_map(|t| {
+                t.teil
+                    .kante
+                    .iter()
+                    .copied()
+                    .chain(t.teil.kontur.iter().flatten().copied())
+            })
             .collect();
         let h = dxf::huelle(&alle);
         for t in out.iter_mut().filter(|t| !t.uebergangen) {
-            for p in t.teil.kante.iter_mut().chain(t.teil.kerben.iter_mut().flatten()) {
+            for p in t
+                .teil
+                .kante
+                .iter_mut()
+                .chain(t.teil.kontur.iter_mut().flatten())
+                .chain(t.teil.kerben.iter_mut().flatten())
+            {
                 *p = [p[0] - h[0], p[1] - h[1]];
             }
         }

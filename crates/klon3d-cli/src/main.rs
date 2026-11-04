@@ -1514,8 +1514,14 @@ fn befehl_dxf(args: &[String]) -> ExitCode {
             continue;
         }
         let h = dxf::huelle(&d.teil.kante);
+        let schnitt = d
+            .teil
+            .kontur
+            .as_ref()
+            .map(|k| format!(" Schnitt {:>8.1} mm", dxf::ring_laenge(k)))
+            .unwrap_or_default();
         println!(
-            "  {:<44} {:>4} Pkt {:>8.1} mm Naht {:>7.1} x {:>7.1} mm {:>3} Passzeichen{}",
+            "  {:<44} {:>4} Pkt {:>8.1} mm Naht {:>7.1} x {:>7.1} mm {:>3} Passzeichen{}{}",
             anzeige_name(&d.teil.name),
             d.teil.kante.len(),
             dxf::ring_laenge(&d.teil.kante),
@@ -1526,7 +1532,8 @@ fn befehl_dxf(args: &[String]) -> ExitCode {
                 String::new()
             } else {
                 format!("  ({} Knoten offen)", d.offene.len())
-            }
+            },
+            schnitt
         );
         for text in &d.daneben {
             println!("      Passzeichen fehlt: {text}");

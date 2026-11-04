@@ -6,6 +6,12 @@
 //! längste geschlossene Polylinie — Länge und Hülle in mm, dazu die Zahl der
 //! Passzeichen (Seamly schreibt jedes zweimal auf Ebene 4).
 //!
+//! Seamly schreibt je Teil zwei Linien: die Schnittlinie auf Ebene 1 und die
+//! Nahtlinie auf Ebene 8. Bei Latex ist die Teilkante die Nahtlinie, deshalb
+//! steht sie hier auf Ebene 1 (was CLO ohne „Swap“ als Kante liest), und die
+//! Zugabekontur kommt als zweite Linie auf Ebene 8 — dieselbe Ebene, auf der
+//! Seamly seine Innenlinien führt. Ihre Sollwerte sind Seamlys **Schnittlinie**.
+//!
 //! Der Test lässt das Programm schreiben und liest die DXF mit einem eigenen
 //! kleinen Leser zurück, unabhängig vom Schreiber.
 
@@ -43,6 +49,16 @@ const SEAMLY: [(&str, f64, f64, f64, usize); 22] = [
 const BUND: (&str, f64, f64, f64, usize) = ("1_BUND_-_UMSCHLAG,_GANZER_UMFANG,_NAHT_HINTEN", 1513.06, 701.26, 96.44, 17);
 
 const TOL_MM: f64 = 0.1;
+
+/// Blockname und Länge der Schnittlinie in mm: Seamlys Ebene 1 aus demselben
+/// Export. Nur die Teile mit Nahtzugabe; die vier Bahnen auf 1,5 mm, weil
+/// unsere Kontur eine Ecke mit beidseitiger Zugabe als Schräge auffasst.
+const SCHNITT: [(&str, f64); 4] = [
+    ("2_VORNE_RECHTS_-_OBERE_LAGE_AN_CF", 2557.1287),
+    ("3_VORNE_LINKS_-_UNTERE_LAGE_AN_CF", 2557.1287),
+    ("4_HINTEN_RECHTS_-_OBERE_LAGE_AN_CB", 2846.7665),
+    ("5_HINTEN_LINKS_-_UNTERE_LAGE_AN_CB", 2846.7665),
+];
 
 type P = [f64; 2];
 
@@ -205,10 +221,22 @@ fn innen(q: P, p: &[P]) -> bool {
 fn pruefe_teil(dxf: &Dxf, (name, laenge, breite, hoehe, kerben): (&str, f64, f64, f64, usize)) {
     let b = dxf.block(name);
 
-    // Genau eine Kante: geschlossen, Ebene 1. Keine Innenlinien (Ebene 8).
-    assert_eq!(b.polylinien.len(), 1, "{name}: Polylinien");
-    let k = &b.polylinien[0];
-    assert_eq!(k.ebene, "1", "{name}: Ebene der Kante");
+    // Ebene 1 ist die Kante. Ebene 8 gibt es höchstens einmal: die
+    // Zugabekontur, die `pruefe_kontur` gesondert prüft.
+    assert!(
+        b.polylinien.len() <= 2,
+        "{name}: {} Polylinien",
+        b.polylinien.len()
+    );
+    assert!(
+        b.polylinien.iter().filter(|p| p.ebene == "8").count() <= 1,
+        "{name}: mehr als eine Polylinie auf Ebene 8"
+    );
+    let k = b
+        .polylinien
+        .iter()
+        .find(|p| p.ebene == "1")
+        .unwrap_or_else(|| panic!("{name}: keine Kante auf Ebene 1"));
     assert!(k.zu, "{name}: Kante nicht geschlossen");
     assert!(k.punkte.len() >= 3, "{name}: {} Punkte", k.punkte.len());
     let p = &k.punkte;
@@ -237,6 +265,85 @@ fn pruefe_teil(dxf: &Dxf, (name, laenge, breite, hoehe, kerben): (&str, f64, f64
         "{name}: Name fehlt, Texte {:?}",
         b.texte
     );
+}
+
+/// Prüft die Zugabekontur eines Teils gegen Seamlys Schnittlinie.
+fn pruefe_kontur(dxf: &Dxf, name: &str, laenge: Option<f64>) {
+    let b = dxf.block(name);
+    let k = b
+        .polylinien
+        .iter()
+        .find(|p| p.ebene == "8")
+        .unwrap_or_else(|| panic!("{name}: keine Kontur auf Ebene 8"));
+    assert!(k.zu, "{name}: Kontur nicht geschlossen");
+    assert!(k.punkte.len() >= 3, "{name}: {} Konturpunkte", k.punkte.len());
+
+    let naht = &b.polylinien.iter().find(|p| p.ebene == "1").unwrap().punkte;
+    let kontur = &k.punkte;
+
+    // Die Kante der Nahtlinie darf nirgends abgeschnitten werden: jeder
+    // Konturpunkt liegt draußen oder auf ihr, und eine freie Kante bleibt, wo
+    // sie ist. Ein Punkt genau auf der Naht zählt zur Naht (Gerade-Ungerade-
+    // Regel zählt den Rand mit), deshalb „streng innen“ mit Abstand > 0.
+    //
+    // 0,05 mm Toleranz: unsere Kontur ist die Zugabekontur mit weniger Punkten
+    // als die dicht abgetastete Nahtlinie, ihre Sehne kann deshalb um Mikrometer
+    // in das Teil fallen - an freien Kanten gemessen 0,0093 mm, an den Bahnen
+    // weniger. Das ist Zeichnungsauflösung, kein Wandern der Kante.
+    const INNEN_MM: f64 = 0.05;
+    let drin = kontur
+        .iter()
+        .filter(|q| innen(**q, naht) && abstand_zum_ring(**q, naht) > INNEN_MM)
+        .count();
+    let auf = kontur
+        .iter()
+        .filter(|q| abstand_zum_ring(**q, naht) <= 1e-6)
+        .count();
+    assert!(
+        auf > 0,
+        "{name}: kein Konturpunkt liegt auf der Naht, freie Kanten wandern mit"
+    );
+    assert_eq!(
+        drin, 0,
+        "{name}: {drin} von {} Konturpunkten liegen im Teil",
+        kontur.len()
+    );
+
+    if let Some(soll) = laenge {
+        let l = ring_laenge(kontur);
+        assert!(
+            (l - soll).abs() <= 1.5,
+            "{name}: Kontur {l:.2} mm, Seamly {soll:.2}"
+        );
+    }
+}
+
+#[test]
+fn zugabekontur_wie_seamly_schnittlinie() {
+    let dxf = klon3d_dxf("rock_kontur.dxf", &[]);
+    for (name, laenge) in SCHNITT {
+        pruefe_kontur(&dxf, name, Some(laenge));
+    }
+    // Der Bund: nur Existenz und Geschlossenheit. Seine Kontur ist 5,05 mm
+    // kürzer als Seamlys, weil wir eine Ecke mit Zugabe auf beiden Seiten als
+    // 45°-Schräge auffassen und Seamly als Gehrung.
+    pruefe_kontur(&dxf, BUND.0, None);
+}
+
+#[test]
+fn ohne_zugabe_keine_zweite_linie() {
+    let dxf = klon3d_dxf("rock_ohne_zugabe.dxf", &[]);
+    let mit: Vec<&str> = SCHNITT.iter().map(|(n, _)| *n).chain([BUND.0]).collect();
+    for name in dxf.teile() {
+        let b = dxf.block(name);
+        let acht = b.polylinien.iter().filter(|p| p.ebene == "8").count();
+        if mit.contains(&name) {
+            assert_eq!(acht, 1, "{name}: Kontur fehlt");
+        } else {
+            assert_eq!(acht, 0, "{name}: Kontur ohne Zugabe");
+            assert_eq!(b.polylinien.len(), 1, "{name}: Polylinien");
+        }
+    }
 }
 
 #[test]

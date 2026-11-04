@@ -12,11 +12,16 @@
 //!
 //! * je Teil ein `BLOCK`, Kante = Nahtlinie als geschlossene `POLYLINE` auf
 //!   Ebene 1, in mm, y nach oben;
+//! * wo das Teil eine Nahtzugabe hat, die Zugabekontur als zweite geschlossene
+//!   `POLYLINE` auf Ebene 8 - das ist Seamlys Innenlinien-Ebene, dieselbe
+//!   Zweitlinie, die CLO beim Umschalten von Schnitt- und Nahtlinie stehen
+//!   lässt;
 //! * Passzeichen auf Ebene 4: `LINE` vom Punkt auf der Kante 4 mm nach innen;
 //! * Teilename als `TEXT` auf Ebene 1;
 //! * im `ENTITIES`-Abschnitt je Teil ein `INSERT` bei (0, 0).
 //!
-//! Innenlinien (Ebene 8) gibt es nicht.
+//! Ebene 8 bleibt leer, wo es keine Zugabe gibt; dann ist die Nahtlinie die
+//! Schnittlinie und eine zweite Linie wäre nur ihre Kopie.
 
 use std::collections::HashSet;
 use std::fmt::Write as _;
@@ -39,6 +44,10 @@ pub struct Teil {
     pub name: String,
     /// Nahtlinie, geschlossen gedacht: der erste Punkt steht nicht am Ende.
     pub kante: Vec<P>,
+    /// Zugabekontur (Schnittlinie), geschlossen gedacht, in derselben Lage wie
+    /// `kante`. `None`, wenn das Teil keine Zugabe hat oder sein Rand nicht
+    /// auflösbar ist.
+    pub kontur: Option<Vec<P>>,
     /// Passzeichen: Fuß auf der Kante, Ende innen.
     pub kerben: Vec<[P; 2]>,
 }
@@ -334,6 +343,21 @@ impl Schreiber {
         self.int(62, 256);
     }
 
+    /// Eine geschlossene `POLYLINE` mit einem `VERTEX` je Punkt.
+    fn ring(&mut self, pts: &[P], ebene: &str) {
+        self.element("POLYLINE", ebene);
+        self.int(66, 1);
+        self.punkt(10, [0.0, 0.0]);
+        self.zahl(30, 0.0);
+        self.int(70, 1); // geschlossen
+        for &p in pts {
+            self.element("VERTEX", ebene);
+            self.punkt(10, p);
+            self.zahl(30, 0.0);
+        }
+        self.element("SEQEND", ebene);
+    }
+
     fn tabelle(&mut self, name: &str, anzahl: i32) {
         self.code(0, "TABLE");
         self.code(2, name);
@@ -390,17 +414,10 @@ pub fn schreibe(teile: &[Teil]) -> Vec<u8> {
     for (t, name) in teile.iter().zip(&namen) {
         k.block(name, "1");
 
-        k.element("POLYLINE", "1");
-        k.int(66, 1);
-        k.punkt(10, [0.0, 0.0]);
-        k.zahl(30, 0.0);
-        k.int(70, 1); // geschlossen
-        for &p in &t.kante {
-            k.element("VERTEX", "1");
-            k.punkt(10, p);
-            k.zahl(30, 0.0);
+        k.ring(&t.kante, "1");
+        if let Some(kontur) = &t.kontur {
+            k.ring(kontur, "8");
         }
-        k.element("SEQEND", "1");
 
         for &[a, b] in &t.kerben {
             k.element("LINE", "4");
@@ -459,7 +476,13 @@ pub fn schreibe(teile: &[Teil]) -> Vec<u8> {
 
     let alle: Vec<P> = teile
         .iter()
-        .flat_map(|t| t.kante.iter().copied().chain(t.kerben.iter().flatten().copied()))
+        .flat_map(|t| {
+            t.kante
+                .iter()
+                .copied()
+                .chain(t.kontur.iter().flatten().copied())
+                .chain(t.kerben.iter().flatten().copied())
+        })
         .collect();
     let h = if alle.is_empty() { [0.0; 4] } else { huelle(&alle) };
 
@@ -516,8 +539,12 @@ pub fn schreibe(teile: &[Teil]) -> Vec<u8> {
     s.linientyp("BYLAYER", "");
     s.linientyp("CONTINUOUS", "Solid line");
     s.code(0, "ENDTAB");
-    s.tabelle("LAYER", 3);
-    for e in ["0", "1", "4"] {
+    // Layer names as Seamly writes them: 1 = seam line, 4 = notches, 8 = inner lines
+    // (here the allowance contour). The count follows the list, so adding a layer
+    // cannot leave the table announcing the wrong number.
+    const EBENEN: [&str; 4] = ["0", "1", "4", "8"];
+    s.tabelle("LAYER", EBENEN.len() as i32);
+    for e in EBENEN {
         s.ebene(e);
     }
     s.code(0, "ENDTAB");
@@ -569,7 +596,12 @@ mod tests {
 
     #[test]
     fn doppelte_namen_werden_eindeutig() {
-        let t = |n: &str| Teil { name: n.into(), kante: vec![], kerben: vec![] };
+        let t = |n: &str| Teil {
+            name: n.into(),
+            kante: vec![],
+            kontur: None,
+            kerben: vec![],
+        };
         let n = blocknamen(&[t("a b"), t("A B"), t("a_b")]);
         assert_eq!(n, ["A_B", "A_B_2", "A_B_3"]);
     }
@@ -625,5 +657,51 @@ mod tests {
         assert!(!senkrecht);
         assert_eq!(m, [5.0, 50.0]);
         assert_eq!(platz, 10.0);
+    }
+
+    /// Ein Teil mit Zugabe bekommt zwei Ringe: Nahtlinie auf Ebene 1, Kontur auf
+    /// Ebene 8. Ohne Zugabe bleibt es bei einem.
+    #[test]
+    fn kontur_kommt_als_zweiter_ring_auf_ebene_8() {
+        let kante = vec![[0.0, 0.0], [100.0, 0.0], [100.0, 100.0], [0.0, 100.0]];
+        let kontur = vec![[-3.0, -3.0], [103.0, -3.0], [103.0, 103.0], [-3.0, 103.0]];
+        let mit = Teil {
+            name: "mit".into(),
+            kante: kante.clone(),
+            kontur: Some(kontur),
+            kerben: vec![],
+        };
+        let ohne = Teil { name: "ohne".into(), kante, kontur: None, kerben: vec![] };
+
+        let text: String = schreibe(&[mit, ohne]).iter().map(|&b| b as char).collect();
+        assert_eq!(text.matches("\r\nPOLYLINE\r\n").count(), 3, "zwei Ringe für `mit`, einer für `ohne`");
+        // Die Hülle der Zeichnung schließt die Kontur ein, sonst läge sie in
+        // CAD außerhalb des sichtbaren Bereichs.
+        assert!(text.contains("$EXTMIN"), "Kopf ohne Hülle");
+        let exmin = text.split("$EXTMIN").nth(1).unwrap();
+        let x0: f64 = exmin.split(" 10\r\n").nth(1).unwrap().split("\r\n").next().unwrap().trim().parse().unwrap();
+        assert!(x0 <= -3.0, "$EXTMIN x = {x0}");
+    }
+
+    /// Die Ebenentabelle kündigt so viele Einträge an, wie sie schreibt — Seamlys
+    /// Leser bricht sonst ab.
+    #[test]
+    fn ebenentabelle_zaehlt_ihre_eintraege() {
+        let text: String = schreibe(&[]).iter().map(|&b| b as char).collect();
+        let ab = text.split("  2\r\nLAYER\r\n").nth(1).expect("keine Ebenentabelle");
+        let anzahl: usize = ab
+            .split(" 70\r\n")
+            .nth(1)
+            .unwrap()
+            .split("\r\n")
+            .next()
+            .unwrap()
+            .trim()
+            .parse()
+            .unwrap();
+        assert_eq!(anzahl, text.matches("\r\nLAYER\r\n  2\r\n").count(), "Anzahl und Einträge");
+        for e in ["0", "1", "4", "8"] {
+            assert!(text.contains(&format!("LAYER\r\n  2\r\n{e}\r\n")), "Ebene {e} fehlt");
+        }
     }
 }
