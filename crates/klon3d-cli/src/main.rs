@@ -32,12 +32,13 @@
 //! [`klon3d_koerper::koerper`]) und schreibt die Gruppe `body` in mm.
 
 mod anziehen;
+mod umriss;
 
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 
-use klon3d_pattern::geom::{lies_messungen, Auswertung};
+use klon3d_pattern::geom::{lies_messungen, Auswertung, Pt};
 use klon3d_pattern::{read_path, Pattern};
 use klon3d_pipeline::dxf;
 
@@ -1317,6 +1318,10 @@ fn befehl_umriss(args: &[String]) -> ExitCode {
     let mut gesamt_ungeloest = 0usize;
     let mut schranke: Option<[f64; 4]> = None;
     let mut umrisse = Vec::with_capacity(teile.len());
+    // Die Zugabekontur je Teil, `None` ohne Zugabe. Getrennt von `umrisse`
+    // gehalten, damit die SVG-Ausgabe erst alle Schnittlinien und dann die
+    // Nahtlinien schreiben kann (die Naht soll obenauf liegen).
+    let mut konturen: Vec<Option<Vec<Pt>>> = Vec::with_capacity(teile.len());
 
     for t in &teile {
         let (knoten, meldung) = ev.stueck_knoten(t);
@@ -1325,12 +1330,20 @@ fn befehl_umriss(args: &[String]) -> ExitCode {
         // cannot be resolved: there, notches on a curve named several times
         // miss the drawing and the edge runs in a zigzag (bishop sleeve of
         // Bolero v37: 2142.7 instead of 1418.6 mm).
-        let umriss = match ev.teilrand(t, klon3d_pattern::kanten::Kurvenquelle::Seamly) {
-            Ok(r) => r.umriss,
-            Err(_) => ev.umriss_aus_knoten(&knoten),
+        let rand = ev.teilrand(t, klon3d_pattern::kanten::Kurvenquelle::Seamly).ok();
+        let umriss = match &rand {
+            Some(r) => r.umriss.clone(),
+            None => ev.umriss_aus_knoten(&knoten),
         };
         gesamt_ungeloest += meldung.len();
         umrisse.push(umriss.clone());
+        // Die Schnittlinie: die Nahtlinie, um die Zugabe ihrer Knoten
+        // verschoben - dieselbe `Ecken::Eigen` wie im DXF-Export und in der
+        // 2D-Ansicht. Ohne `Teilrand` (Rueckfall oben) gibt es keine Zugabe,
+        // und es wird keine geraten.
+        let kontur = umriss::zugabekontur(rand.as_ref());
+        let schnitt = kontur.as_ref().map(|k| umriss::ringlaenge(k) * f);
+        konturen.push(kontur);
 
         if umriss.len() < 3 {
             println!(
@@ -1361,8 +1374,14 @@ fn befehl_umriss(args: &[String]) -> ExitCode {
         let laenge = ev.umriss_laenge(&ring) * f;
         let schlusskante = umriss[0].dist(*umriss.last().unwrap()) * f;
         let knotenzahl = knoten.len();
+        // Die Schnittlinie steht nur da, wo es eine gibt: ein Teil ohne Zugabe
+        // bekommt keine Spalte (kein `0.0`).
+        let schnittspalte = match schnitt {
+            Some(s) => format!("  {s:>8.1} mm Schnitt"),
+            None => String::new(),
+        };
         println!(
-            "  {:<40} {:>3} Knoten {:>5} Pkt {:>8.1} mm Naht {:>7.1} x {:>7.1} mm Schluss {:>5.1} mm{}",
+            "  {:<40} {:>3} Knoten {:>5} Pkt {:>8.1} mm Naht {:>7.1} x {:>7.1} mm Schluss {:>5.1} mm{}{}",
             anzeige(t),
             knotenzahl,
             umriss.len(),
@@ -1370,6 +1389,7 @@ fn befehl_umriss(args: &[String]) -> ExitCode {
             (x1 - x0) * f,
             (y1 - y0) * f,
             schlusskante,
+            schnittspalte,
             if meldung.is_empty() {
                 String::new()
             } else {
@@ -1404,6 +1424,25 @@ fn befehl_umriss(args: &[String]) -> ExitCode {
              width=\"{breite:.3}mm\" height=\"{hoehe:.3}mm\" \
              viewBox=\"0 0 {breite:.3} {hoehe:.3}\">\n"
         ));
+        // Erst die Schnittlinien, dann die Nahtlinien: die Naht soll obenauf
+        // liegen. Ein Teil ohne Zugabe bekommt keine zweite Linie - seine
+        // Kontur waere nur eine Kopie der Naht.
+        let mut grau = String::new();
+        for kontur in konturen.iter().flatten() {
+            if kontur.len() < 3 {
+                continue;
+            }
+            grau.push_str(&format!(
+                "    <path d=\"{}\"/>\n",
+                umriss::pfad(kontur, a, c, f)
+            ));
+        }
+        if !grau.is_empty() {
+            s.push_str(&format!(
+                "  <!-- Schnittlinien, Einheit mm, vor der Naht -->\n  <g fill=\"none\" \
+                 stroke=\"#808080\" stroke-width=\"0.2\">\n{grau}  </g>\n"
+            ));
+        }
         s.push_str(&format!(
             "  <!-- Nahtlinien, Einheit mm, y nach unten wie in der .sm2d -->\n  <g fill=\"none\" \
              stroke=\"black\" stroke-width=\"0.3\">\n"
@@ -1412,18 +1451,7 @@ fn befehl_umriss(args: &[String]) -> ExitCode {
             if umriss.len() < 3 {
                 continue;
             }
-            let mut d2 = String::new();
-            for (i, p) in umriss.iter().enumerate() {
-                let x = (p.x - a) * f;
-                let y = (p.y - c) * f;
-                d2.push_str(&format!(
-                    "{}{:.3} {:.3}",
-                    if i == 0 { "M" } else { " L" },
-                    x,
-                    y
-                ));
-            }
-            d2.push_str(" Z");
+            let d2 = umriss::pfad(umriss, a, c, f);
             s.push_str(&format!("    <path d=\"{d2}\"/>\n"));
         }
         s.push_str("  </g>\n</svg>\n");

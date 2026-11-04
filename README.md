@@ -58,7 +58,7 @@ cargo test  --locked --workspace --exclude klon3d-view
 
 ```text
 klon3d info      <pattern.sm2d>                     read a pattern, report its structure
-klon3d umriss    <pattern.sm2d> [--svg <file>]      piece outlines
+klon3d umriss    <pattern.sm2d> [--svg <file>]      piece outlines (seam line, plus the allowance contour)
 klon3d dxf       <pattern.sm2d> <out.dxf>           AAMA DXF export (edge = seam line, allowance contour on layer 8)
 klon3d naehte    <pattern.sm2d> [--liste <file>]    check seam edges and the seam list
 klon3d netz      <pattern.sm2d> [--obj <file>]      triangle meshes and seam point pairs
