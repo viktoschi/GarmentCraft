@@ -192,6 +192,7 @@ fn dehnung_je_punkt_ist_flaechengewichtet() {
             punktknoten: Vec::new(),
             kanten: Vec::new(),
             kontur: Vec::new(),
+            fadenlauf: None,
             aufgegeben: 0,
         }],
         naehte: Vec::new(),

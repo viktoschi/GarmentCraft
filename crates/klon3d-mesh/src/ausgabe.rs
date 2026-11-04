@@ -80,6 +80,12 @@ pub fn svg(netz: &Musternetz, nebeneinander: bool) -> String {
         h
     );
     let _ = writeln!(s, r#"<rect x="{:.2}" y="{:.2}" width="{b:.2}" height="{h:.2}" fill="white"/>"#, lo[0] - rand, lo[1] - rand);
+    // One arrowhead for the grainlines; `orient="auto"` points it along the
+    // line, so both ends of an axis use the same marker.
+    let _ = writeln!(
+        s,
+        r##"<defs><marker id="pfeil" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="4" markerHeight="4" orient="auto"><path d="M0 0 L10 5 L0 10 z" fill="#0a7"/></marker></defs>"##
+    );
     for (ti, t) in netz.teile.iter().enumerate() {
         let _ = writeln!(s, r#"<g id="{}">"#, xml(&t.teil));
         let mut d = String::new();
@@ -90,6 +96,22 @@ pub fn svg(netz: &Musternetz, nebeneinander: bool) -> String {
         let _ = writeln!(s, r##"<path d="{d}" fill="#f4f4f4" stroke="#9a9a9a" stroke-width="0.15"/>"##);
         let rand: Vec<String> = (0..t.nrand as u32).map(|v| lage(ti, v)).map(|p| format!("{:.3},{:.3}", p[0], p[1])).collect();
         let _ = writeln!(s, r##"<polygon points="{}" fill="none" stroke="#000" stroke-width="0.4"/>"##, rand.join(" "));
+        if let Some(f) = &t.fadenlauf {
+            // The axis with Seamly2D's arrowheads: `pfeile` 0 puts one at both
+            // ends, 1 only at `p2`, 2 only at `p1`.
+            let a = [f.p1[0] + versatz[ti][0], f.p1[1] + versatz[ti][1]];
+            let b = [f.p2[0] + versatz[ti][0], f.p2[1] + versatz[ti][1]];
+            let _ = writeln!(
+                s,
+                r##"<g class="fadenlauf"><line x1="{:.3}" y1="{:.3}" x2="{:.3}" y2="{:.3}" stroke="#0a7" stroke-width="0.35" marker-start="{}" marker-end="{}"/></g>"##,
+                a[0],
+                a[1],
+                b[0],
+                b[1],
+                if f.pfeile == 1 { "none" } else { "url(#pfeil)" },
+                if f.pfeile == 2 { "none" } else { "url(#pfeil)" },
+            );
+        }
         for (name, v) in &t.punktknoten {
             let p = lage(ti, *v);
             let _ = writeln!(s, r##"<circle cx="{:.3}" cy="{:.3}" r="0.9" fill="none" stroke="#000" stroke-width="0.25"><title>{}</title></circle>"##, p[0], p[1], xml(name));

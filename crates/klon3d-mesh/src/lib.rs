@@ -103,8 +103,27 @@ pub struct Teilnetz {
     pub kanten: Vec<Kantenzug>,
     /// Nahtlinie des Teils (mm), geschlossen gedacht.
     pub kontur: Vec<[f64; 2]>,
+    /// Der Fadenlauf des Teils, im selben Bezugssystem und in derselben
+    /// Einheit wie [`Teilnetz::punkte`]; `None` ohne sichtbaren
+    /// `<grainline>` (oder wenn er sich nicht auswerten ließ, siehe
+    /// [`Musternetz::fehler`]).
+    pub fadenlauf: Option<Fadenlauf>,
     /// Schlechte Dreiecke, die die Verfeinerung stehen lassen musste.
     pub aufgegeben: usize,
+}
+
+/// Der Fadenlauf eines Teils in Netzkoordinaten (mm, Achsen wie
+/// [`Teilnetz::punkte`]).
+///
+/// `p1` ist das untere Ende der Achse, `p2` das obere. `pfeile` ist Seamly2Ds
+/// `arrows`: 0 an beiden Enden eine Spitze, 1 nur an `p2`, 2 nur an `p1`. Die
+/// Spitzen sind eine Zeichnungseigenschaft und erst in [`ausgabe::svg`]
+/// umgesetzt, nicht Teil der Achse.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct Fadenlauf {
+    pub p1: [f64; 2],
+    pub p2: [f64; 2],
+    pub pfeile: u8,
 }
 
 /// Wie eine Stelle einer Naht zustande kam.
@@ -214,7 +233,24 @@ pub fn vernetze(
     let mut fehler = Vec::new();
     for t in ev.muster().pieces() {
         let name = t.name.clone().unwrap_or_else(|| t.id.clone());
-        match ev.teilrand(t, quelle).map_err(|e| e.to_string()).and_then(|r| Teilgeo::aus(&r)) {
+        let rand = match ev.teilrand(t, quelle).map_err(|e| e.to_string()) {
+            Ok(r) => r,
+            Err(e) => {
+                fehler.push(format!("{name}: {e}"));
+                continue;
+            }
+        };
+        // A grainline that does not evaluate is a message, not a lost piece:
+        // Seamly2D refuses to draw such a pattern, but the mesh of the piece
+        // is fine without its axis.
+        let fadenlauf = match ev.fadenlauf(t) {
+            Ok(fl) => fl,
+            Err(e) => {
+                fehler.push(format!("{name}: Fadenlauf: {e}"));
+                None
+            }
+        };
+        match Teilgeo::aus(&rand, fadenlauf.as_ref()) {
             Ok(g) => geo.push(g),
             Err(e) => fehler.push(format!("{name}: {e}")),
         }
@@ -267,6 +303,7 @@ pub fn vernetze(
             punktknoten,
             kanten: g.kanten.clone(),
             kontur: g.kontur.clone(),
+            fadenlauf: g.fadenlauf,
             aufgegeben: *aufgegeben,
         });
     }

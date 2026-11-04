@@ -37,7 +37,7 @@ use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 use klon3d_pattern::kanten::Teilrand;
 use klon3d_pattern::naehte::{Nahtergebnis, Nahtseite};
 
-use crate::{Nahtstelle, Parameter, Stellenart};
+use crate::{Fadenlauf, Nahtstelle, Parameter, Stellenart};
 
 fn abstand(a: [f64; 2], b: [f64; 2]) -> f64 {
     (a[0] - b[0]).hypot(a[1] - b[1])
@@ -131,10 +131,15 @@ pub(crate) struct Teilgeo {
     /// Punktknoten (dann ist der ganze Umriss eine Kante).
     pub knoten: Vec<String>,
     pub kontur: Vec<[f64; 2]>,
+    /// Fadenlauf in mm, schon im Bezugssystem der Kontur.
+    pub fadenlauf: Option<Fadenlauf>,
 }
 
 impl Teilgeo {
-    pub fn aus(r: &Teilrand) -> Result<Self, String> {
+    /// `fl` ist der bereits gelesene Fadenlauf des Teils in Mustereinheiten
+    /// ([`klon3d_pattern::fadenlauf::Auswertung::fadenlauf`]); `None` heißt
+    /// ohne sichtbaren Fadenlauf.
+    pub fn aus(r: &Teilrand, fl: Option<&klon3d_pattern::fadenlauf::Fadenlauf>) -> Result<Self, String> {
         let mm = r.mm_pro_einheit;
         let f = |p: &klon3d_pattern::Pt| [p.x * mm, p.y * mm];
         let kontur: Vec<[f64; 2]> = r.umriss.iter().map(f).collect();
@@ -154,7 +159,14 @@ impl Teilgeo {
         if let Some(k) = kanten.iter().position(|k| k.laenge <= 1e-6) {
             return Err(format!("Randkante {k} hat keine Länge"));
         }
-        Ok(Teilgeo { teil: r.teil.clone(), kanten, knoten, kontur })
+        // The grainline comes from `Auswertung::fadenlauf` in the same stored
+        // frame as `Teilrand::umriss`, so the same factor converts it.
+        let fadenlauf = fl.map(|g| Fadenlauf {
+            p1: f(&g.p1),
+            p2: f(&g.p2),
+            pfeile: g.pfeile,
+        });
+        Ok(Teilgeo { teil: r.teil.clone(), kanten, knoten, kontur, fadenlauf })
     }
 
     fn knotenname(&self, i: usize) -> String {
@@ -611,6 +623,7 @@ mod tests {
             kanten: vec![Kantenzug::neu(bogen), Kantenzug::neu(vec![[0.0, 20.0], [0.0, 0.0]]), Kantenzug::neu(vec![[0.0, 0.0], [20.0, 0.0]])],
             knoten: vec!["A".into(), "B".into(), "C".into()],
             kontur: Vec::new(),
+            fadenlauf: None,
         }];
         let p = Parameter::default();
         let mut g = Gruppe { glieder: vec![Glied { teil: 0, kante: 0, s0: 0.0, s1: teile[0].kanten[0].laenge }], f: Vec::new() };
