@@ -41,6 +41,7 @@ pub mod naehte;
 pub mod nahtzugabe;
 pub mod parse;
 pub mod property;
+pub mod saumkontur;
 pub mod smis;
 pub mod vorschlag;
 pub mod zip;
