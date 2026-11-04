@@ -188,6 +188,8 @@ pub struct Anzeige2d {
     pub fadenlauf: bool,
     /// Notches as short ticks across the outline.
     pub passzeichen: bool,
+    /// The cutting line of every piece: the seam line displaced by its seam allowance.
+    pub zugabe: bool,
 }
 
 impl Default for Anzeige2d {
@@ -199,21 +201,23 @@ impl Default for Anzeige2d {
             massstab: true,
             fadenlauf: true,
             passzeichen: true,
+            zugabe: true,
         }
     }
 }
 
 impl Anzeige2d {
-    /// `naehte=1;laengen=0;teilnamen=1;massstab=1;fadenlauf=1;passzeichen=1`
+    /// `naehte=1;laengen=0;teilnamen=1;massstab=1;fadenlauf=1;passzeichen=1;zugabe=1`
     pub fn als_text(&self) -> String {
         format!(
-            "naehte={};laengen={};teilnamen={};massstab={};fadenlauf={};passzeichen={}",
+            "naehte={};laengen={};teilnamen={};massstab={};fadenlauf={};passzeichen={};zugabe={}",
             u8::from(self.naehte),
             u8::from(self.laengen),
             u8::from(self.teilnamen),
             u8::from(self.massstab),
             u8::from(self.fadenlauf),
-            u8::from(self.passzeichen)
+            u8::from(self.passzeichen),
+            u8::from(self.zugabe)
         )
     }
 
@@ -232,6 +236,7 @@ impl Anzeige2d {
                 "massstab" => a.massstab = an,
                 "fadenlauf" => a.fadenlauf = an,
                 "passzeichen" => a.passzeichen = an,
+                "zugabe" => a.zugabe = an,
                 _ => {}
             }
         }
@@ -467,7 +472,7 @@ mod tests {
     fn fadenlauf_und_passzeichen_gespeichert() {
         // A text written before both toggles existed switches both on.
         let alt = Anzeige2d::aus_text("naehte=1;laengen=0;teilnamen=1;massstab=1");
-        assert!(alt.fadenlauf && alt.passzeichen);
+        assert!(alt.fadenlauf && alt.passzeichen && alt.zugabe);
         for (f, p) in [(false, false), (false, true), (true, false), (true, true)] {
             let a = Anzeige2d {
                 fadenlauf: f,
@@ -479,6 +484,24 @@ mod tests {
                 text.contains(&format!("fadenlauf={}", u8::from(f))),
                 "{text}"
             );
+            assert_eq!(Anzeige2d::aus_text(&text), a);
+        }
+    }
+
+    #[test]
+    fn zugabe_gespeichert() {
+        // A text written before the allowance toggle existed
+        let alt = Anzeige2d::aus_text(
+            "naehte=1;laengen=0;teilnamen=1;massstab=1;fadenlauf=0;passzeichen=0",
+        );
+        assert!(alt.zugabe, "old text: allowance on by default");
+        for an in [false, true] {
+            let a = Anzeige2d {
+                zugabe: an,
+                ..Anzeige2d::default()
+            };
+            let text = a.als_text();
+            assert!(text.contains(&format!("zugabe={}", u8::from(an))), "{text}");
             assert_eq!(Anzeige2d::aus_text(&text), a);
         }
     }

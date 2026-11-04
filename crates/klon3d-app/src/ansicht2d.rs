@@ -379,6 +379,7 @@ struct Farben {
     text: Color32,
     fadenlauf: Color32,
     passzeichen: Color32,
+    zugabe: Color32,
 }
 
 impl Farben {
@@ -398,6 +399,9 @@ impl Farben {
                 text: v.strong_text_color(),
                 fadenlauf: Color32::from_rgb(220, 150, 230),
                 passzeichen: Color32::from_rgb(240, 240, 240),
+                // Neutral grey: the cutting line is an auxiliary line next to the blue outline
+                // (seam line) and must not compete with the seam colours or the grainline.
+                zugabe: Color32::from_rgb(160, 160, 160),
             }
         } else {
             let sel = v.selection.bg_fill;
@@ -413,6 +417,9 @@ impl Farben {
                 text: v.strong_text_color(),
                 fadenlauf: Color32::from_rgb(140, 40, 150),
                 passzeichen: Color32::from_rgb(20, 20, 20),
+                // Darker than the background, lighter than the seam line, so the cutting line reads
+                // as an auxiliary line and stays visible under the seam strokes.
+                zugabe: Color32::from_rgb(120, 120, 120),
             }
         }
     }
@@ -574,6 +581,23 @@ impl Ansicht2d {
                 punkte,
                 Stroke::new(AUSWAHL_BREITE, farben.linie_gewaehlt),
             ));
+        }
+
+        // The cutting line of every piece that carries a seam allowance: the seam line displaced by
+        // it. Over the fills and the selection band, under the seam strokes, so the seam colours
+        // stay readable on top of it.
+        if self.anzeige.zugabe {
+            for t in &muster.teile {
+                let Some(kontur) = &t.kontur else {
+                    continue;
+                };
+                let v = t.versatz(self.ausgelegt);
+                if !auf_schirm(t, v) {
+                    continue;
+                }
+                let punkte: Vec<Pos2> = kontur.iter().map(|&p| bild(p, v)).collect();
+                painter.add(Shape::closed_line(punkte, Stroke::new(1.0, farben.zugabe)));
+            }
         }
 
         // Seam edges.
@@ -865,6 +889,7 @@ mod tests {
             umfang_cm: None,
             rand: Err("ohne".into()),
             kanten_naehte: Vec::new(),
+            kontur: None,
             fadenlauf: None,
             fadenlauf_fehler: None,
             umriss,

@@ -53,6 +53,7 @@ use klon3d_pattern::kanten::{Kurvenquelle, Teilrand};
 use klon3d_pattern::naehte::{
     lies_nahtliste, pruefe_naehte, Nahtbericht, Nahtergebnis, MIN_SEITE_CM, TOLERANZ_CM,
 };
+use klon3d_pattern::saumkontur::{Ecken, Saumkontur};
 use klon3d_pattern::vorschlag::nahtliste_text;
 use klon3d_pattern::{read_path, Pattern};
 
@@ -129,6 +130,11 @@ pub struct Teil {
     pub schluessel: String,
     /// Seam line in construction coordinates, open (last point ≠ first point).
     pub umriss: Vec<Pt>,
+    /// Cutting line in construction coordinates, closed (last point ≠ first point): the seam line
+    /// displaced by the allowance of its nodes (`Saumkontur::aus_teilrand`, `Ecken::Eigen` - the
+    /// same choice the DXF export makes). `None` when the piece carries no allowance at all or its
+    /// boundary cannot be resolved.
+    pub kontur: Option<Vec<Pt>>,
     /// The inside of `umriss` as triangles for the filled drawing ([`fuellung`]).
     pub fuellung: Fuellung,
     /// Bounding box in construction coordinates.
@@ -440,6 +446,7 @@ fn laden_ungeschuetzt(auftrag: &Ladeauftrag) -> Result<Muster, Ladefehler> {
         let rand = ev
             .teilrand(p, Kurvenquelle::Seamly)
             .map_err(|e| e.to_string());
+        let kontur = zugabekontur(rand.as_ref().ok());
         let umfang_cm = rand.as_ref().ok().map(|r| r.in_cm(r.umfang()));
         let kanten = rand.as_ref().map(|r| r.kanten.len()).unwrap_or(0);
         let (fadenlauf, fadenlauf_fehler) = match ev.fadenlauf(p) {
@@ -460,6 +467,7 @@ fn laden_ungeschuetzt(auftrag: &Ladeauftrag) -> Result<Muster, Ladefehler> {
             umfang_cm,
             rand,
             kanten_naehte: vec![Vec::new(); kanten],
+            kontur,
             umriss,
         });
     }
@@ -832,6 +840,29 @@ pub fn bereinigt(punkte: &[Pt]) -> Vec<Pt> {
         out.pop();
     }
     out
+}
+
+/// The cutting line of a piece: its seam line displaced by the allowance of its nodes.
+///
+/// The same construction the DXF export uses ([`Saumkontur::aus_teilrand`] with
+/// [`Ecken::Eigen`]): `after` per point node, so a free edge (`after = 0`) stays free instead of
+/// gaining an allowance. `None` when the piece carries no allowance at all - its contour would only
+/// be a copy of the seam line - or when the boundary cannot be resolved.
+///
+/// [`Saumkontur::punkte`] lists both ends of every segment, so the ring is deduplicated with
+/// [`bereinigt`], which also drops the closing point.
+pub fn zugabekontur(rand: Option<&Teilrand>) -> Option<Vec<Pt>> {
+    let rand = rand?;
+    // A negative allowance is a reduction, not "no allowance": compare the magnitude.
+    if !rand
+        .punktknoten
+        .iter()
+        .any(|k| k.zugabe_nach.unwrap_or(0.0).abs() > 1e-9)
+    {
+        return None;
+    }
+    let kontur = bereinigt(Saumkontur::aus_teilrand(rand, Ecken::Eigen).punkte());
+    (kontur.len() >= 3).then_some(kontur)
 }
 
 /// Signed area of a ring (shoelace formula); positive for counter-clockwise in a y-up frame.

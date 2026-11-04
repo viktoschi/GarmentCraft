@@ -325,6 +325,7 @@ fn menues_und_gesperrte_eintraege() {
                 "Maßstab",
                 "Fadenlauf",
                 "Passzeichen",
+                "Zugabe Umschalt+U",
             ],
             &[],
         ),

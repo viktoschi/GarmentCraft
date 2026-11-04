@@ -141,12 +141,28 @@ fn haken(
 }
 
 /// A checkbox entry for a toggle that shows something of a pattern; enabled only with one.
-fn haken_mit_muster(ui: &mut egui::Ui, app: &mut App, text: &str, an: bool, aktion: Aktion) {
+fn haken_mit_muster(
+    ui: &mut egui::Ui,
+    app: &mut App,
+    text: &str,
+    kuerzel: &str,
+    an: bool,
+    aktion: Aktion,
+) {
     let da = app.muster.is_some();
     let mut zustand = an;
-    let r = ui
-        .add_enabled(da, egui::Checkbox::new(&mut zustand, text))
-        .on_disabled_hover_text(ERST_MUSTER);
+    let r = if kuerzel.is_empty() {
+        ui.add_enabled(da, egui::Checkbox::new(&mut zustand, text))
+    } else {
+        ui.add_enabled(
+            da,
+            egui::Checkbox::new(
+                &mut zustand,
+                (text, Atom::grow(), RichText::new(kuerzel).weak()),
+            ),
+        )
+    }
+    .on_disabled_hover_text(ERST_MUSTER);
     if r.clicked() {
         app.aktion(aktion);
     }
@@ -432,6 +448,7 @@ fn anzeige(app: &mut App, ui: &mut egui::Ui) {
             ui,
             app,
             "Fadenlauf",
+            "",
             a.fadenlauf,
             Aktion::FadenlaufUmschalten,
         );
@@ -439,8 +456,17 @@ fn anzeige(app: &mut App, ui: &mut egui::Ui) {
             ui,
             app,
             "Passzeichen",
+            "",
             a.passzeichen,
             Aktion::PasszeichenUmschalten,
+        );
+        haken_mit_muster(
+            ui,
+            app,
+            "Zugabe",
+            "Umschalt+U",
+            a.zugabe,
+            Aktion::ZugabeUmschalten,
         );
     });
     ui.menu_button("Avatar", |ui| spaeter(ui, "Avatar", ""));
@@ -685,6 +711,13 @@ pub fn werkzeugleiste_2d(app: &mut App, ui: &mut egui::Ui) {
             "Passzeichen",
             "Passzeichen als kurzer Strich quer zur Nahtlinie",
             Aktion::PasszeichenUmschalten,
+        ),
+        (
+            a.zugabe,
+            "Zugabe",
+            "Schnittlinie jedes Teils, also die Nahtlinie um die eingezeichnete Nahtzugabe versetzt \
+             (Umschalt+U)",
+            Aktion::ZugabeUmschalten,
         ),
     ] {
         if ui

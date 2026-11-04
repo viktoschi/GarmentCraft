@@ -101,6 +101,7 @@ pub enum Aktion {
     MassstabUmschalten,
     FadenlaufUmschalten,
     PasszeichenUmschalten,
+    ZugabeUmschalten,
     /// Suggest the seams of the pattern shown and ask where to save the list.
     NaehteVorschlagen,
     ThemaUmschalten,
@@ -616,6 +617,7 @@ impl App {
             Aktion::PasszeichenUmschalten => {
                 self.ansicht.anzeige.passzeichen = !self.ansicht.anzeige.passzeichen
             }
+            Aktion::ZugabeUmschalten => self.ansicht.anzeige.zugabe = !self.ansicht.anzeige.zugabe,
             Aktion::NaehteVorschlagen => self.naehte_vorschlagen(),
             Aktion::ThemaUmschalten => {
                 self.thema = match self.thema {
@@ -1000,27 +1002,39 @@ impl App {
         if self.dateiwahl.is_some() || ctx.text_edit_focused() {
             return;
         }
-        let (strg_tab, f, l, zurueck, vor, naehte, laengen, leertaste, karte_dehnung, karte_passform) =
-            ctx.input_mut(|i| {
-                (
-                    // Ctrl must match exactly, so plain Tab below does not see Ctrl+Tab.
-                    i.consume_key(Modifiers::COMMAND, Key::Tab),
-                    i.consume_key(Modifiers::NONE, Key::F),
-                    i.consume_key(Modifiers::NONE, Key::L),
-                    // Shift+Tab first: `consume_key` ignores extra Shift.
-                    i.consume_key(Modifiers::SHIFT, Key::Tab),
-                    i.consume_key(Modifiers::NONE, Key::Tab),
-                    i.consume_key(Modifiers::SHIFT, Key::S),
-                    i.consume_key(Modifiers::SHIFT, Key::Z),
-                    // CLO's shortcut for start/hold; consumed, so egui does not press a focused
-                    // button with it as well.
-                    i.consume_key(Modifiers::NONE, Key::Space),
-                    // The two inspection maps of the issue have shortcuts; the distance map does
-                    // not (Alt+9 stays free for it if it ever gets one).
-                    i.consume_key(Modifiers::ALT, Key::Num7),
-                    i.consume_key(Modifiers::ALT, Key::Num8),
-                )
-            });
+        let (
+            strg_tab,
+            f,
+            l,
+            zurueck,
+            vor,
+            naehte,
+            laengen,
+            zugabe,
+            leertaste,
+            karte_dehnung,
+            karte_passform,
+        ) = ctx.input_mut(|i| {
+            (
+                // Ctrl must match exactly, so plain Tab below does not see Ctrl+Tab.
+                i.consume_key(Modifiers::COMMAND, Key::Tab),
+                i.consume_key(Modifiers::NONE, Key::F),
+                i.consume_key(Modifiers::NONE, Key::L),
+                // Shift+Tab first: `consume_key` ignores extra Shift.
+                i.consume_key(Modifiers::SHIFT, Key::Tab),
+                i.consume_key(Modifiers::NONE, Key::Tab),
+                i.consume_key(Modifiers::SHIFT, Key::S),
+                i.consume_key(Modifiers::SHIFT, Key::Z),
+                i.consume_key(Modifiers::SHIFT, Key::U),
+                // CLO's shortcut for start/hold; consumed, so egui does not press a focused
+                // button with it as well.
+                i.consume_key(Modifiers::NONE, Key::Space),
+                // The two inspection maps of the issue have shortcuts; the distance map does
+                // not (Alt+9 stays free for it if it ever gets one).
+                i.consume_key(Modifiers::ALT, Key::Num7),
+                i.consume_key(Modifiers::ALT, Key::Num8),
+            )
+        });
         if leertaste {
             self.aktion(Aktion::SimulationUmschalten);
         }
@@ -1041,6 +1055,9 @@ impl App {
         }
         if laengen {
             self.aktion(Aktion::LaengenUmschalten);
+        }
+        if zugabe {
+            self.aktion(Aktion::ZugabeUmschalten);
         }
         if strg_tab || zurueck || vor {
             // Tab selects pieces and windows here; egui must not also move the keyboard focus.
