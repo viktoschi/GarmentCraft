@@ -18,13 +18,15 @@ pub enum Koerper {
     /// normiert), Radius, Geschwindigkeit des ganzen Körpers.
     Zylinder { punkt: [f64; 3], achse: [f64; 3], radius: f64, geschwindigkeit: [f64; 3] },
     /// Starres Dreiecksnetz, um `versatz` verschoben, mit der Geschwindigkeit
-    /// des ganzen Körpers. Ein sich verformender Körper (Stufe 7) braucht
-    /// mehr als das.
+    /// des ganzen Körpers. Ein sich verformender Körper (Stufe 7) trägt
+    /// stattdessen ein Feld in [`Koerpernetz::punktgeschwindigkeit`]; dann
+    /// zählt je Kontakt die Geschwindigkeit an seiner Stelle, und
+    /// `geschwindigkeit` ist nur der Rückfall für ein Netz ohne Feld.
     Netz { netz: Arc<Koerpernetz>, versatz: [f64; 3], geschwindigkeit: [f64; 3] },
 }
 
 /// Ergebnis eines Kontakts: Normale (nach außen), Eindringtiefe (> 0) und
-/// Geschwindigkeit des Körpers an der Stelle.
+/// Geschwindigkeit des Körpers **an der Stelle**.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct Kontakt {
     pub normale: [f64; 3],
@@ -80,22 +82,26 @@ impl Koerper {
             Koerper::Netz { netz, versatz, geschwindigkeit } => {
                 let n = netz.naechster(sub(x, *versatz), netz.suchtiefe.max(abstand))?;
                 let tiefe = abstand - n.abstand;
-                (tiefe > 0.0).then_some(Kontakt { normale: n.normale, tiefe, geschwindigkeit: *geschwindigkeit })
+                // Die Geschwindigkeit gehört an den Trefferpunkt, nicht an den
+                // Körper: am Oberarm ist die Haut langsam, an der Hand schnell.
+                let vk = netz.geschwindigkeit_an(n.dreieck as usize, n.punkt, *geschwindigkeit);
+                (tiefe > 0.0).then_some(Kontakt { normale: n.normale, tiefe, geschwindigkeit: vk })
             }
         }
     }
 
     /// Erster Durchstoß des Wegs `von` → `nach` durch die Oberfläche von außen:
-    /// Punkt, Normale und Geschwindigkeit des Körpers. Nur beim Netz; den
-    /// Zylinder findet [`Self::kontakt`] in jeder Tiefe. Der Körper gilt dabei
-    /// als ruhend in seiner Lage am Schrittende — für bewegte Körper (Stufe 7)
-    /// reicht das nicht.
+    /// Punkt, Normale und Geschwindigkeit des Körpers **am Treffpunkt**. Nur
+    /// beim Netz; den Zylinder findet [`Self::kontakt`] in jeder Tiefe. Liegt
+    /// ein Geschwindigkeitsfeld vor ([`Koerpernetz::punktgeschwindigkeit`]),
+    /// zählt dort die Stelle; sonst gilt der Körper als ruhend in seiner Lage
+    /// am Schrittende.
     pub fn durchstoss(&self, von: [f64; 3], nach: [f64; 3]) -> Option<([f64; 3], [f64; 3], [f64; 3])> {
         match self {
             Koerper::Zylinder { .. } => None,
             Koerper::Netz { netz, versatz, geschwindigkeit } => {
-                let (p, n) = netz.durchstoss(sub(von, *versatz), sub(nach, *versatz))?;
-                Some((add(p, *versatz), n, *geschwindigkeit))
+                let (p, n, vk) = netz.durchstoss(sub(von, *versatz), sub(nach, *versatz), *geschwindigkeit)?;
+                Some((add(p, *versatz), n, vk))
             }
         }
     }

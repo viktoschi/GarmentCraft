@@ -207,7 +207,7 @@ fn punkteregen_bleibt_draussen() {
     let soll: Vec<Option<[f64; 3]>> = start
         .iter()
         .map(|&p| {
-            let (q, n) = k.durchstoss(p, [p[0], p[1], -0.5])?;
+            let (q, n, _) = k.durchstoss(p, [p[0], p[1], -0.5], [0.0; 3])?;
             (n[2] >= 25f64.to_radians().cos()).then_some(q)
         })
         .collect();
@@ -277,7 +277,7 @@ fn tuch_ueber_spitze() {
         }
         // Wie tief sticht die Spitze durch die Mittelfläche des Tuchs?
         let mut t_min = 0.0f64;
-        spitze.stiche(SUCHTIEFE, 0.0, [0.0; 3], &s.dreiecke, &s.x, |_, _, _, t| t_min = t_min.min(t));
+        spitze.stiche(SUCHTIEFE, 0.0, [0.0; 3], &s.dreiecke, &s.x, |_, _, _, _, t| t_min = t_min.min(t));
         let z_min = s.x.iter().map(|q| q[2]).fold(f64::INFINITY, f64::min);
         eprintln!("Durchgänge {durchgaenge}: Spitze {:.2} mm durch den Stoff, tiefster Stoffpunkt z {:.1} mm", -t_min * 1e3, z_min * 1e3);
         tiefste.push(t_min);

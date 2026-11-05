@@ -198,7 +198,7 @@ fn main() {
             std::fs::write(o.join("ende.obj"), ausgabe::obj(&s)).unwrap();
         }
         // Stoffkanten, die den Körper kreuzen (Durchstoß von einem Ende aus).
-        let kreuzt = |a: [f64; 3], b: [f64; 3]| k.durchstoss(a, b).is_some() || k.durchstoss(b, a).is_some();
+        let kreuzt = |a: [f64; 3], b: [f64; 3]| k.durchstoss(a, b, [0.0; 3]).is_some() || k.durchstoss(b, a, [0.0; 3]).is_some();
         let kanten = s.abstand.punkte.iter().filter(|&&[i, j]| kreuzt(s.x[i as usize], s.x[j as usize])).count();
         // Tiefe: fünf Stellen auf der Kante, Abstand mit Vorzeichen.
         let tief = |a: [f64; 3], b: [f64; 3]| {
