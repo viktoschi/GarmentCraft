@@ -33,7 +33,7 @@ use klon3d_app::App;
 const AUFRUF: &str = "Aufruf: bildschirmfoto [--muster <datei.sm2d>] [--aus <bild.png>]\n\
                      \x20             [--breite <punkte>] [--hoehe <punkte>] [--dunkel|--hell]\n\
                      \x20             [--massstab <punkte je Pixel>] [--simulieren <bilder>]\n\
-                     \x20             [--karte dehnung|passform|abstand]\n\
+                     \x20             [--karte dehnung|passform|abstand|spannung]\n\
                      Kennung 3: kein Grafikbeschleuniger (wgpu-Adapter) vorhanden";
 
 /// The window as the app opens it (`main.rs`), unless the caller asks for another size.
@@ -101,10 +101,11 @@ fn main() -> ExitCode {
                         "dehnung" => Some(Karte::Dehnung),
                         "passform" => Some(Karte::Passform),
                         "abstand" => Some(Karte::Abstand),
+                        "spannung" => Some(Karte::Spannung),
                         "keine" | "aus" => None,
                         a => {
                             eprintln!(
-                                "--karte: unbekannte Karte {a:?} (dehnung, passform, abstand)\n{AUFRUF}"
+                                "--karte: unbekannte Karte {a:?} (dehnung, passform, abstand, spannung)\n{AUFRUF}"
                             );
                             return ExitCode::FAILURE;
                         }
