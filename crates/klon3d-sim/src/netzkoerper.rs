@@ -126,6 +126,17 @@ impl Gitter {
         }
         Some(r)
     }
+
+    /// Wie [`Self::bereich`], aber aus schon bestimmten Zellindizes.
+    fn klammer(&self, a: [i64; 3], b: [i64; 3]) -> [(usize, usize); 3] {
+        let mut r = [(0, 0); 3];
+        for d in 0..3 {
+            let n = self.zahl[d] as i64;
+            debug_assert!(b[d] >= 0 && a[d] < n, "Punkt außerhalb des Gitters");
+            r[d] = (a[d].max(0) as usize, b[d].min(n - 1) as usize);
+        }
+        r
+    }
 }
 
 /// Das Körpernetz mit allem, was die Abstandsfrage braucht (SI-Einheiten,
@@ -135,8 +146,12 @@ pub struct Koerpernetz {
     pub punkte: Vec<[f64; 3]>,
     pub dreiecke: Vec<[u32; 3]>,
     pub flaechennormale: Vec<[f64; 3]>,
-    /// Je Dreieck die Pseudonormalen seiner Kanten p0p1, p1p2, p2p0 (normiert).
-    pub kantennormale: Vec<[[f64; 3]; 3]>,
+    /// Je Dreieck und Kante das andere Dreieck daran, oder das Dreieck selbst
+    /// bei einer Randkante. Reine Topologie: ändert sich beim Verformen nicht.
+    /// Damit sind die Kantennormalen (siehe [`Self::kantennormale`]) eine
+    /// Abfrage statt eines Vorrats: eine Abstandsfrage braucht **eine**, nicht
+    /// alle 80 268.
+    pub nachbar: Vec<[u32; 3]>,
     /// Winkelgewichtete Pseudonormale je Punkt (normiert).
     pub punktnormale: Vec<[f64; 3]>,
     /// Hüllkugel je Dreieck: Schwerpunkt und größter Eckabstand davon.
@@ -150,6 +165,13 @@ pub struct Koerpernetz {
     pub randkanten: usize,
     /// Umschlossenes Volumen (m³), positiv bei Normalen nach außen.
     pub volumen: f64,
+    /// Geschwindigkeit je **Punkt** (m/s), leer bei einem starren oder
+    /// ruhenden Körper (Stufe 7, #96). Bei einem verformten Körper ist ein
+    /// einziger Wert für alle falsch: an der Schulter wandert die Haut
+    /// langsam, an der Hand schnell, und die Reibung rechnet mit dem
+    /// Unterschied zum Stoff. Das Feld gehört zum Punktstand in `punkte`;
+    /// [`Self::nachfuehren`] räumt es ab, weil es dann veraltet ist.
+    pub punktgeschwindigkeit: Vec<[f64; 3]>,
 }
 
 /// Ein Punkt aus CLOs Rahmen (mm, y oben, vorn +z) im Szenenrahmen (m, z oben,
@@ -204,9 +226,68 @@ fn normiert(a: [f64; 3]) -> [f64; 3] {
     }
 }
 
+/// Die drei Schwerpunktgewichte von `p` auf dem Dreieck (a, b, c) aus der
+/// Projektion auf die Dreiecksebene; die Summe ist 1, ein Punkt außerhalb darf
+/// negative Gewichte bekommen (Extrapolation).
+fn schwerpunktgewichte(p: [f64; 3], a: [f64; 3], b: [f64; 3], c: [f64; 3]) -> [f64; 3] {
+    let (e1, e2, e3) = (sub(b, a), sub(c, a), sub(p, a));
+    let (d00, d01, d11) = (dot(e1, e1), dot(e1, e2), dot(e2, e2));
+    let (d20, d21) = (dot(e3, e1), dot(e3, e2));
+    let nenner = d00 * d11 - d01 * d01;
+    if nenner == 0.0 {
+        return [1.0, 0.0, 0.0];
+    }
+    let u = (d11 * d20 - d01 * d21) / nenner;
+    let w = (d00 * d21 - d01 * d20) / nenner;
+    [1.0 - u - w, u, w]
+}
+
 /// Winkel zwischen u und v (rad).
 fn winkel(u: [f64; 3], v: [f64; 3]) -> f64 {
     norm(cross(u, v)).atan2(dot(u, v))
+}
+
+/// Achtung: `punkte` ist der *neue* Punktstand, die Dreiecke sind Topologie.
+/// Alles, was von den Punkten abhängt, in einem Durchgang — der gemeinsame Weg
+/// von [`Koerpernetz::neu`] und [`Koerpernetz::nachfuehren`], damit beide auf
+/// denselben Punkten Bit für Bit dasselbe liefern.
+///
+/// Schreibt in die übergebenen Puffer: beim Nachführen sind das die Felder des
+/// Netzes selbst, also fallen je Bild keine 3,5 MB Allokation an.
+fn punktabhaengig(
+    punkte: &[[f64; 3]],
+    dreiecke: &[[u32; 3]],
+    flaechennormale: &mut Vec<[f64; 3]>,
+    punktnormale: &mut Vec<[f64; 3]>,
+    kugel: &mut Vec<([f64; 3], f64)>,
+) -> f64 {
+    flaechennormale.clear();
+    flaechennormale.extend(dreiecke.iter().map(|d| {
+        let [a, b, c] = d.map(|i| punkte[i as usize]);
+        normiert(cross(sub(b, a), sub(c, a)))
+    }));
+
+    punktnormale.clear();
+    punktnormale.resize(punkte.len(), [0.0; 3]);
+    let mut volumen = 0.0;
+    kugel.clear();
+    kugel.reserve(dreiecke.len());
+    for (t, d) in dreiecke.iter().enumerate() {
+        let q = d.map(|i| punkte[i as usize]);
+        for k in 0..3 {
+            let w = winkel(sub(q[(k + 1) % 3], q[k]), sub(q[(k + 2) % 3], q[k]));
+            let p = d[k] as usize;
+            punktnormale[p] = add(punktnormale[p], mul(flaechennormale[t], w));
+        }
+        volumen += dot(q[0], cross(q[1], q[2])) / 6.0;
+        let m = mul(add(add(q[0], q[1]), q[2]), 1.0 / 3.0);
+        let r = q.iter().map(|&e| norm(sub(e, m))).fold(0.0, f64::max);
+        kugel.push((m, r));
+    }
+    for p in punktnormale.iter_mut() {
+        *p = normiert(*p);
+    }
+    volumen
 }
 
 impl Koerpernetz {
@@ -235,74 +316,47 @@ impl Koerpernetz {
             }
         }
 
-        let flaechennormale: Vec<[f64; 3]> = dreiecke
-            .iter()
-            .map(|d| {
-                let [a, b, c] = d.map(|i| punkte[i as usize]);
-                normiert(cross(sub(b, a), sub(c, a)))
-            })
-            .collect();
-
-        let mut kantennormale = vec![[[0.0; 3]; 3]; dreiecke.len()];
+        // Aus der Kantentabelle die Nachbarschaft je Dreieckseite - das ist
+        // Topologie und wird nie wieder angefasst.
+        let mut nachbar = vec![[0u32; 3]; dreiecke.len()];
         let mut randkanten = 0;
         for (&(i, j), liste) in &kanten {
             match liste[..] {
                 [(t, k, _)] => {
                     randkanten += 1;
-                    kantennormale[t as usize][k as usize] = flaechennormale[t as usize];
+                    nachbar[t as usize][k as usize] = t;
                 }
                 [(t1, k1, r1), (t2, k2, r2)] => {
                     if r1 == r2 {
                         return Err(format!("Netz uneinheitlich orientiert an der Kante {i}–{j}"));
                     }
-                    let nk = normiert(add(flaechennormale[t1 as usize], flaechennormale[t2 as usize]));
-                    kantennormale[t1 as usize][k1 as usize] = nk;
-                    kantennormale[t2 as usize][k2 as usize] = nk;
+                    nachbar[t1 as usize][k1 as usize] = t2;
+                    nachbar[t2 as usize][k2 as usize] = t1;
                 }
                 _ => return Err(format!("Kante {i}–{j} hat {} Dreiecke", liste.len())),
             }
         }
 
-        let mut punktnormale = vec![[0.0; 3]; n];
-        let mut volumen = 0.0;
-        let mut kugel = Vec::with_capacity(dreiecke.len());
-        for (t, d) in dreiecke.iter().enumerate() {
-            let q = d.map(|i| punkte[i as usize]);
-            for k in 0..3 {
-                let w = winkel(sub(q[(k + 1) % 3], q[k]), sub(q[(k + 2) % 3], q[k]));
-                let p = d[k] as usize;
-                punktnormale[p] = add(punktnormale[p], mul(flaechennormale[t], w));
-            }
-            volumen += dot(q[0], cross(q[1], q[2])) / 6.0;
-            let m = mul(add(add(q[0], q[1]), q[2]), 1.0 / 3.0);
-            let r = q.iter().map(|&e| norm(sub(e, m))).fold(0.0, f64::max);
-            kugel.push((m, r));
-        }
+        let (mut flaechennormale, mut punktnormale, mut kugel) = (Vec::new(), Vec::new(), Vec::new());
+        let volumen = punktabhaengig(
+            &punkte,
+            &dreiecke,
+            &mut flaechennormale,
+            &mut punktnormale,
+            &mut kugel,
+        );
         if volumen <= 0.0 {
             return Err(format!("Volumen {volumen:.4e} m³ ≤ 0: die Normalen zeigen nach innen"));
         }
-        for p in punktnormale.iter_mut() {
-            *p = normiert(*p);
-        }
 
-        let huelle = |d: &[u32; 3]| {
-            let q = d.map(|i| punkte[i as usize]);
-            let (mut a, mut b) = (q[0], q[0]);
-            for e in &q[1..] {
-                for k in 0..3 {
-                    a[k] = a[k].min(e[k]);
-                    b[k] = b[k].max(e[k]);
-                }
-            }
-            (a, b)
-        };
-        let gitter = baue_gitter(&punkte, suchtiefe, &dreiecke.iter().map(huelle).collect::<Vec<_>>());
-        let punktgitter = baue_gitter(&punkte, suchtiefe, &punkte.iter().map(|&p| (p, p)).collect::<Vec<_>>());
+        let mut gitter = Gitter { ursprung: [0.0; 3], zelle: 0.0, zahl: [0; 3], anfang: Vec::new(), eintraege: Vec::new() };
+        let mut punktgitter = gitter.clone();
+        gitter_beide(&mut gitter, &mut punktgitter, suchtiefe, &punkte, &dreiecke);
         Ok(Koerpernetz {
             punkte,
             dreiecke,
             flaechennormale,
-            kantennormale,
+            nachbar,
             punktnormale,
             kugel,
             suchtiefe,
@@ -310,7 +364,53 @@ impl Koerpernetz {
             punktgitter,
             randkanten,
             volumen,
+            punktgeschwindigkeit: Vec::new(),
         })
+    }
+
+    /// Führt das Netz auf neue Punkte nach, ohne die Topologie neu zu bauen
+    /// (Stufe 7, Bewegung): Dreiecksliste, Nachbarschaft, Randkanten und die
+    /// Gitteraufteilung bleiben, neu gerechnet wird nur, was von den Punkten
+    /// abhängt — Flächen- und Punktnormalen, Hüllkugeln, Volumen und die
+    /// Zellbelegung beider Gitter. Die Kantennormalen fallen ganz weg: sie sind
+    /// eine Abfrage ([`Self::kantennormale`]), keine Vorberechnung.
+    ///
+    /// Die Gitter wachsen mit, wenn der verformte Körper über den alten
+    /// Hüllquader hinausreicht, und schrumpfen **nicht**: sonst folgte die
+    /// Zellenzahl der Pose, und ein Wechsel der Pose änderte die Abfragekosten.
+    ///
+    /// `punkte` hat dieselbe Zahl und Reihenfolge wie bei [`Self::neu`]. Die
+    /// Werte sind auf denselben Punkten Bit für Bit die von
+    /// [`Koerpernetz::aus_clo_mm`] — beide Wege laufen durch
+    /// [`punktabhaengig`].
+    ///
+    /// Eine gesetzte [`Self::punktgeschwindigkeit`] wird **abgeräumt**: sie
+    /// gehörte zum alten Punktstand. Ein bewegter Körper setzt sie danach neu
+    /// ([`Self::setze_punktgeschwindigkeit`]).
+    pub fn nachfuehren(&mut self, punkte: &[[f64; 3]]) -> Result<(), String> {
+        if punkte.len() != self.punkte.len() {
+            return Err(format!("nachfuehren: {} Punkte statt {}", punkte.len(), self.punkte.len()));
+        }
+        // Die vorhandenen Puffer übernehmen (nicht kopieren): `punktabhaengig`
+        // leert sie und füllt sie neu, die Allokation bleibt also bestehen.
+        let mut flaechennormale = std::mem::take(&mut self.flaechennormale);
+        let mut punktnormale = std::mem::take(&mut self.punktnormale);
+        let mut kugel = std::mem::take(&mut self.kugel);
+        let volumen = punktabhaengig(punkte, &self.dreiecke, &mut flaechennormale, &mut punktnormale, &mut kugel);
+        self.flaechennormale = flaechennormale;
+        self.punktnormale = punktnormale;
+        self.kugel = kugel;
+        if volumen <= 0.0 {
+            return Err(format!("Volumen {volumen:.4e} m³ ≤ 0 nach dem Verformen: das Netz ist gekippt"));
+        }
+        self.punkte.clear();
+        self.punkte.extend_from_slice(punkte);
+        self.volumen = volumen;
+        self.punktgeschwindigkeit.clear();
+
+        // Beide Gitter in einem Zug: dasselbe Raster, ein Zellenlauf.
+        gitter_beide(&mut self.gitter, &mut self.punktgitter, self.suchtiefe, punkte, &self.dreiecke);
+        Ok(())
     }
 
     /// Aus einem Netz im Rahmen von CLO und `klon3d koerper`: mm, y oben, vorn
@@ -323,13 +423,69 @@ impl Koerpernetz {
         Koerpernetz::neu(p, d, suchtiefe)
     }
 
+    /// Die Pseudonormale der Kante k am Dreieck t: an einer Randkante die
+    /// eigene Flächennormale, sonst die normierte Summe mit der des Nachbarn.
+    /// Wird auf Abruf gerechnet — eine Abstandsfrage braucht eine, nicht alle
+    /// 80 268, und die Summe ist symmetrisch, also liefern beide Nachbarn
+    /// dasselbe.
+    pub fn kantennormale(&self, t: usize, k: usize) -> [f64; 3] {
+        let o = self.nachbar[t][k] as usize;
+        if o == t {
+            self.flaechennormale[t]
+        } else {
+            normiert(add(self.flaechennormale[t], self.flaechennormale[o]))
+        }
+    }
+
     /// Die Pseudonormale der Region.
     fn pseudonormale(&self, t: usize, r: Region) -> [f64; 3] {
         match r {
             Region::Flaeche => self.flaechennormale[t],
-            Region::Kante(k) => self.kantennormale[t][k as usize],
+            Region::Kante(k) => self.kantennormale(t, k as usize),
             Region::Ecke(k) => self.punktnormale[self.dreiecke[t][k as usize] as usize],
         }
+    }
+
+    /// Setzt die Geschwindigkeit je Punkt (m/s) — das Feld, das ein sich
+    /// verformender Körper statt **einer** Geschwindigkeit braucht (#96).
+    ///
+    /// Verlangt einen Wert je Punkt, sonst wäre die Zuordnung still falsch.
+    /// Leer räumt das Feld ab und macht den Körper wieder starr.
+    pub fn setze_punktgeschwindigkeit(&mut self, v: Vec<[f64; 3]>) -> Result<(), String> {
+        if !v.is_empty() && v.len() != self.punkte.len() {
+            return Err(format!(
+                "Geschwindigkeit für {} Punkte, das Netz hat {}",
+                v.len(),
+                self.punkte.len()
+            ));
+        }
+        self.punktgeschwindigkeit = v;
+        Ok(())
+    }
+
+    /// Geschwindigkeit der Oberfläche am Punkt `p` auf Dreieck `t` (m/s):
+    /// linear aus den Eckgeschwindigkeiten gemischt, nach denselben
+    /// Schwerpunktgewichten wie [`naechster_auf_dreieck`] sie benutzt. An der
+    /// Schulter ist die Haut langsam, an der Hand schnell — ein einziger Wert
+    /// für den ganzen Körper wäre dort um mehr falsch, als die Reibung groß ist.
+    ///
+    /// `starr` gilt, solange [`Self::punktgeschwindigkeit`] leer ist — der
+    /// eine Wert eines ruhenden oder nur verschobenen Körpers.
+    pub fn geschwindigkeit_an(&self, t: usize, p: [f64; 3], starr: [f64; 3]) -> [f64; 3] {
+        if self.punktgeschwindigkeit.is_empty() {
+            return starr;
+        }
+        let d = self.dreiecke[t];
+        let [a, b, c] = d.map(|i| self.punkte[i as usize]);
+        let gew = schwerpunktgewichte(p, a, b, c);
+        let mut q = [0.0f64; 3];
+        for (j, &i) in d.iter().enumerate() {
+            let v = self.punktgeschwindigkeit[i as usize];
+            for k in 0..3 {
+                q[k] += gew[j] * v[k];
+            }
+        }
+        q
     }
 
     /// Ergebnis für Dreieck t mit nächstem Punkt c in Region r.
@@ -378,7 +534,11 @@ impl Koerpernetz {
     /// Intersection“, 1997): Punkt und Flächennormale. Fängt Stoffpunkte, die
     /// in einem Schritt tiefer als die Suchtiefe oder ganz durch ein dünnes Teil
     /// (Arm, Finger) laufen würden; Austritte von innen zählen nicht.
-    pub fn durchstoss(&self, a: [f64; 3], b: [f64; 3]) -> Option<([f64; 3], [f64; 3])> {
+    ///
+    /// Dritter Wert ist die Geschwindigkeit der Oberfläche am Treffpunkt
+    /// ([`Self::geschwindigkeit_an`]) — beim verformten Körper je Stelle
+    /// verschieden, sonst der Wert des ganzen Körpers.
+    pub fn durchstoss(&self, a: [f64; 3], b: [f64; 3], starr: [f64; 3]) -> Option<([f64; 3], [f64; 3], [f64; 3])> {
         let d = sub(b, a);
         if dot(d, d) < 1e-24 {
             return None;
@@ -429,7 +589,10 @@ impl Koerpernetz {
                 }
             }
         }
-        best.map(|(s, t)| (add(a, mul(d, s.clamp(0.0, 1.0))), self.flaechennormale[t]))
+        best.map(|(s, t)| {
+            let p = add(a, mul(d, s.clamp(0.0, 1.0)));
+            (p, self.flaechennormale[t], self.geschwindigkeit_an(t, p, starr))
+        })
     }
 
     /// **Körperpunkt gegen Stoffdreieck** (CLO:
@@ -454,8 +617,10 @@ impl Koerpernetz {
     /// Durchstöße je Bild in Ruhe).
     ///
     /// `x`, `v`, `w` sind Lage, Geschwindigkeit und inverse Masse der
-    /// Stoffpunkte; `versatz` und `geschwindigkeit` die des Körpers. Liefert
-    /// die Zahl der Korrekturen.
+    /// Stoffpunkte; `versatz` und `geschwindigkeit` gelten für den **ganzen**
+    /// Körper. Ist [`Self::punktgeschwindigkeit`] gesetzt, gilt sie je
+    /// gestochenem Körperpunkt und ersetzt `geschwindigkeit` (#96): an der
+    /// Schulter langsam, an der Hand schnell. Liefert die Zahl der Korrekturen.
     #[allow(clippy::too_many_arguments)]
     pub fn punkte_gegen_dreiecke(
         &self,
@@ -468,23 +633,25 @@ impl Koerpernetz {
         v: &mut [[f64; 3]],
     ) -> usize {
         // Je Dreieck der tiefste Stich; danach ist das Dreieck schon gehoben.
-        let mut tiefster: Vec<Option<(f64, [f64; 3], [f64; 3])>> = vec![None; dreiecke.len()];
+        // Der Körperpunkt steht dabei, weil seine Geschwindigkeit zählt.
+        let mut tiefster: Vec<Option<(f64, [f64; 3], [f64; 3], u32)>> = vec![None; dreiecke.len()];
         // Rundung: was schon gehoben ist, liegt bei t ≈ 0.
-        self.stiche(tief, -1e-9, versatz, dreiecke, x, |di, bary, n, t| {
-            if tiefster[di].is_none_or(|(d, _, _)| -t > d) {
-                tiefster[di] = Some((-t, n, bary));
+        self.stiche(tief, -1e-9, versatz, dreiecke, x, |di, kir, bary, n, t| {
+            if tiefster[di].is_none_or(|(d, _, _, _)| -t > d) {
+                tiefster[di] = Some((-t, n, bary, kir));
             }
         });
         let mut zahl = 0;
         for (d, stich) in dreiecke.iter().zip(tiefster) {
-            let Some((delta, n, bary)) = stich else { continue };
+            let Some((delta, n, bary, kir)) = stich else { continue };
             let idx = d.map(|i| i as usize);
             let gew = idx.map(|i| w[i]);
             let nenner: f64 = (0..3).map(|j| bary[j] * bary[j] * gew[j]).sum();
             if nenner <= 0.0 {
                 continue;
             }
-            let vq = sub((0..3).fold([0.0; 3], |s, j| add(s, mul(v[idx[j]], bary[j]))), geschwindigkeit);
+            let vk = self.geschwindigkeit_je_punkt(kir as usize, geschwindigkeit);
+            let vq = sub((0..3).fold([0.0; 3], |s, j| add(s, mul(v[idx[j]], bary[j]))), vk);
             let vn = dot(vq, n).min(0.0);
             for j in 0..3 {
                 let f = bary[j] * gew[j] / nenner;
@@ -496,10 +663,21 @@ impl Koerpernetz {
         zahl
     }
 
+    /// Geschwindigkeit des Körperpunkts `k`: das Feld, wenn gesetzt, sonst der
+    /// eine Wert des ganzen Körpers.
+    fn geschwindigkeit_je_punkt(&self, k: usize, starr: [f64; 3]) -> [f64; 3] {
+        if self.punktgeschwindigkeit.is_empty() {
+            starr
+        } else {
+            self.punktgeschwindigkeit[k]
+        }
+    }
+
     /// Alle Stiche: für jedes Stoffdreieck (Index in `dreiecke`) jeder
     /// Körperpunkt, dessen Gerade p + t·n das Dreieck bei −`tief` < t <
-    /// `band` trifft; gemeldet mit Schwerpunktgewichten des Treffpunkts,
-    /// Normale und t.
+    /// `band` trifft; gemeldet mit dem **Körperpunkt**, den
+    /// Schwerpunktgewichten des Treffpunkts, der Normale und t.
+    #[allow(clippy::too_many_arguments)]
     pub fn stiche(
         &self,
         tief: f64,
@@ -507,7 +685,7 @@ impl Koerpernetz {
         versatz: [f64; 3],
         dreiecke: &[[u32; 3]],
         x: &[[f64; 3]],
-        mut f: impl FnMut(usize, [f64; 3], [f64; 3], f64),
+        mut f: impl FnMut(usize, u32, [f64; 3], [f64; 3], f64),
     ) {
         let rand = tief.max(band);
         for (di, d) in dreiecke.iter().enumerate() {
@@ -545,7 +723,7 @@ impl Koerpernetz {
                 }
                 let t = dot(e2, qv) / det;
                 if t > -tief && t < band {
-                    f(di, [1.0 - bu - bv, bu, bv], n, t);
+                    f(di, k as u32, [1.0 - bu - bv, bu, bv], n, t);
                 }
             });
         }
@@ -603,11 +781,8 @@ impl Koerpernetz {
     }
 }
 
-/// Gitter mit Zellen der Kantenlänge 2·Suchtiefe über dem Hüllquader der
-/// Punkte, um die Suchtiefe erweitert; jeder Quader steht in allen Zellen, die
-/// er berührt. Eine Abfrage mit Radius ≤ Suchtiefe berührt so höchstens
-/// 2×2×2 Zellen.
-fn baue_gitter(punkte: &[[f64; 3]], suchtiefe: f64, quader: &[([f64; 3], [f64; 3])]) -> Gitter {
+/// Hüllquader aller Punkte (je Achse kleinstes und größtes).
+fn huelle_punkte(punkte: &[[f64; 3]]) -> ([f64; 3], [f64; 3]) {
     let mut lo = [f64::INFINITY; 3];
     let mut hi = [f64::NEG_INFINITY; 3];
     for p in punkte {
@@ -616,46 +791,142 @@ fn baue_gitter(punkte: &[[f64; 3]], suchtiefe: f64, quader: &[([f64; 3], [f64; 3
             hi[a] = hi[a].max(p[a]);
         }
     }
-    let zelle = 2.0 * suchtiefe;
-    let ursprung = sub(lo, [suchtiefe; 3]);
-    let mut zahl = [1usize; 3];
-    for a in 0..3 {
-        zahl[a] = (((hi[a] + suchtiefe - ursprung[a]) / zelle).floor() as usize + 1).max(1);
-    }
-    let mut g = Gitter { ursprung, zelle, zahl, anfang: Vec::new(), eintraege: Vec::new() };
-    let bereiche: Vec<[(usize, usize); 3]> = quader.iter().map(|&(a, b)| g.bereich(a, b).expect("Quader liegt im Gitter")).collect();
-    let nz = zahl[0] * zahl[1] * zahl[2];
-    let mut zaehler = vec![0u32; nz + 1];
-    for r in &bereiche {
-        for kz in r[2].0..=r[2].1 {
-            for ky in r[1].0..=r[1].1 {
-                for kx in r[0].0..=r[0].1 {
-                    zaehler[g.zellnummer([kx, ky, kz]) + 1] += 1;
-                }
-            }
+    (lo, hi)
+}
+
+/// Zellspanne eines Dreiecks aus schon bestimmten Eckzellen: das Raster ist
+/// achsenparallel und `floor` monoton, also ist die Spanne der kleinsten und
+/// größten Eckzelle genau die Spanne des Hüllquaders.
+fn dreieck_klammer(zellen: &[[i64; 3]], d: &[u32; 3]) -> ([i64; 3], [i64; 3]) {
+    let (mut lo, mut hi) = (zellen[d[0] as usize], zellen[d[0] as usize]);
+    for &i in &d[1..] {
+        let k = zellen[i as usize];
+        for a in 0..3 {
+            lo[a] = lo[a].min(k[a]);
+            hi[a] = hi[a].max(k[a]);
         }
     }
-    for z in 0..nz {
-        zaehler[z + 1] += zaehler[z];
+    (lo, hi)
+}
+
+/// Gitter mit Zellen der Kantenlänge 2·Suchtiefe über dem Hüllquader der
+/// Punkte, um die Suchtiefe erweitert; jedes Dreieck steht in allen Zellen, die
+/// sein Hüllquader berührt. Eine Abfrage mit Radius ≤ Suchtiefe berührt so
+/// höchstens 2×2×2 Zellen.
+///
+/// Das Dreiecksgitter und das Punktgitter liegen **auf demselben Raster** (es
+/// hängt nur an den Punkten und der Suchtiefe), deshalb bestimmt
+/// [`gitter_beide`] es einmal für beide und füllt sie danach getrennt.
+fn gitter_beide(g: &mut Gitter, pg: &mut Gitter, suchtiefe: f64, punkte: &[[f64; 3]], dreiecke: &[[u32; 3]]) {
+    let (lo, hi) = huelle_punkte(punkte);
+    let zelle = 2.0 * suchtiefe;
+    let bedarf_lo = sub(lo, [suchtiefe; 3]);
+    let mut bedarf_hi = hi;
+    for a in 0..3 {
+        bedarf_hi[a] += suchtiefe;
     }
-    let mut frei = zaehler.clone();
-    let mut liste = vec![0u32; zaehler[nz] as usize];
-    for (t, r) in bereiche.iter().enumerate() {
+    // An den alten Kasten beider Gitter anschließen: das Raster schrumpft nie,
+    // sonst hinge die Zellenzahl an der Pose und ein Posenwechsel änderte die
+    // Abfragekosten. Ein leeres Gitter (`zahl == [0; 3]`) hat keinen Kasten.
+    let mut ursprung = bedarf_lo;
+    let mut ende = bedarf_hi;
+    for alt in [&*g, &*pg] {
+        if alt.zahl == [0; 3] {
+            continue;
+        }
+        for a in 0..3 {
+            ursprung[a] = ursprung[a].min(alt.ursprung[a]);
+            ende[a] = ende[a].max(alt.ursprung[a] + alt.zelle * alt.zahl[a] as f64);
+        }
+    }
+    let mut zahl = [1usize; 3];
+    for a in 0..3 {
+        zahl[a] = (((ende[a] - ursprung[a]) / zelle).ceil() as usize).max(1);
+    }
+    for gg in [&mut *g, &mut *pg] {
+        gg.ursprung = ursprung;
+        gg.zelle = zelle;
+        gg.zahl = zahl;
+    }
+
+    // Eckzellen der Punkte einmal bestimmen: das Punktgitter braucht sie als
+    // Eintrag, das Dreiecksgitter als Spannenendpunkte.
+    let zellen: Vec<[i64; 3]> = punkte.iter().map(|&p| g.index(p)).collect();
+    let nz = zahl[0] * zahl[1] * zahl[2];
+    gitter_punkte(pg, &zellen, nz);
+    gitter_dreiecke(g, &zellen, dreiecke, nz);
+}
+
+/// Belegt ein Gitter, dessen Einträge je **eine** Zelle belegen (Punkte).
+fn gitter_punkte(g: &mut Gitter, zellen: &[[i64; 3]], nz: usize) {
+    leere_tabelle(g, nz);
+    for k in zellen {
+        let r = g.klammer(*k, *k);
+        let z = g.zellnummer([r[0].0, r[1].0, r[2].0]);
+        g.anfang[z + 1] += 1;
+    }
+    summiere(g, nz);
+    g.eintraege.clear();
+    g.eintraege.resize(g.anfang[nz] as usize, 0);
+    let mut frei = g.anfang.clone();
+    for (e, k) in zellen.iter().enumerate() {
+        let r = g.klammer(*k, *k);
+        let z = g.zellnummer([r[0].0, r[1].0, r[2].0]);
+        g.eintraege[frei[z] as usize] = e as u32;
+        frei[z] += 1;
+    }
+}
+
+/// Belegt ein Gitter, dessen Einträge einen Zellbereich belegen (Dreiecke).
+fn gitter_dreiecke(g: &mut Gitter, zellen: &[[i64; 3]], dreiecke: &[[u32; 3]], nz: usize) {
+    leere_tabelle(g, nz);
+    for d in dreiecke {
+        let (a, b) = dreieck_klammer(zellen, d);
+        let r = g.klammer(a, b);
         for kz in r[2].0..=r[2].1 {
             for ky in r[1].0..=r[1].1 {
                 for kx in r[0].0..=r[0].1 {
                     let z = g.zellnummer([kx, ky, kz]);
-                    liste[frei[z] as usize] = t as u32;
+                    g.anfang[z + 1] += 1;
+                }
+            }
+        }
+    }
+    summiere(g, nz);
+    g.eintraege.clear();
+    g.eintraege.resize(g.anfang[nz] as usize, 0);
+    let mut frei = g.anfang.clone();
+    for (e, d) in dreiecke.iter().enumerate() {
+        let (a, b) = dreieck_klammer(zellen, d);
+        let r = g.klammer(a, b);
+        for kz in r[2].0..=r[2].1 {
+            for ky in r[1].0..=r[1].1 {
+                for kx in r[0].0..=r[0].1 {
+                    let z = g.zellnummer([kx, ky, kz]);
+                    g.eintraege[frei[z] as usize] = e as u32;
                     frei[z] += 1;
                 }
             }
         }
     }
-    g.anfang = zaehler;
-    g.eintraege = liste;
-    g
 }
 
+/// Setzt die Zählertabelle auf null, ohne sie je Bild neu anzulegen.
+fn leere_tabelle(g: &mut Gitter, nz: usize) {
+    if g.anfang.len() != nz + 1 {
+        g.anfang = vec![0u32; nz + 1];
+    } else {
+        g.anfang.iter_mut().for_each(|v| *v = 0);
+    }
+}
+
+/// Wandelt die Zähler in Anfangspositionen um: `anfang[z]` ist danach der
+/// erste Platz der Zelle z.
+fn summiere(g: &mut Gitter, nz: usize) {
+    for z in 0..nz {
+        g.anfang[z + 1] += g.anfang[z];
+    }
+}
 /// Geschlossener Zylinder (Achse z) als Netz, Normalen nach außen:
 /// `segmente` Punkte je Ring, `ringe` Abschnitte zwischen `z_unten` und
 /// `z_oben`, Deckel als Fächer. Der Prüffall Röhre rechnet damit gegen den
@@ -787,17 +1058,17 @@ mod tests {
     #[test]
     fn durchstoss_von_aussen() {
         let w = wuerfel(1.0);
-        let (p, n) = w.durchstoss([0.2, 0.3, 3.0], [0.2, 0.3, -3.0]).unwrap();
+        let (p, n, _) = w.durchstoss([0.2, 0.3, 3.0], [0.2, 0.3, -3.0], [0.0; 3]).unwrap();
         assert!(norm(sub(p, [0.2, 0.3, 1.0])) < 1e-12 && (n[2] - 1.0).abs() < 1e-12, "{p:?} {n:?}");
-        assert!(w.durchstoss([0.2, 0.3, 0.0], [0.2, 0.3, -3.0]).is_none());
-        assert!(w.durchstoss([0.2, 0.3, 3.0], [0.2, 0.3, 1.5]).is_none());
+        assert!(w.durchstoss([0.2, 0.3, 0.0], [0.2, 0.3, -3.0], [0.0; 3]).is_none());
+        assert!(w.durchstoss([0.2, 0.3, 3.0], [0.2, 0.3, 1.5], [0.0; 3]).is_none());
         // genau durch die Diagonale der Oberseite, die Kante ihrer zwei Dreiecke
-        let (p, _) = w.durchstoss([0.5, 0.5, 2.0], [0.5, 0.5, 0.0]).unwrap();
+        let (p, _, _) = w.durchstoss([0.5, 0.5, 2.0], [0.5, 0.5, 0.0], [0.0; 3]).unwrap();
         assert!((p[2] - 1.0).abs() < 1e-12);
         // dünne Platte 2 mm: ganz hindurch, Eintritt oben
         let (q, d) = zylinder(0.05, -0.001, 0.001, 64, 1);
         let platte = Koerpernetz::neu(q, d, 0.01).unwrap();
-        let (p, n) = platte.durchstoss([0.01, 0.0, 0.05], [0.01, 0.0, -0.05]).unwrap();
+        let (p, n, _) = platte.durchstoss([0.01, 0.0, 0.05], [0.01, 0.0, -0.05], [0.0; 3]).unwrap();
         assert!((p[2] - 0.001).abs() < 1e-12 && n[2] > 0.999);
     }
 
@@ -838,6 +1109,110 @@ mod tests {
         // Ein zweiter Durchgang findet nichts mehr.
         let n2 = k.punkte_gegen_dreiecke(0.02, [0.0; 3], [0.0; 3], &[[0, 1, 2]], &[1.0; 3], &mut x, &mut v);
         assert_eq!(n2, 0);
+    }
+
+    /// Ein Feld je Punkt wird nach den Schwerpunktgewichten des Treffpunkts
+    /// gemischt: eine lineare Verteilung über das Netz kommt am Treffpunkt
+    /// linear heraus (Schwerpunktinterpolation ist für lineare Funktionen exakt).
+    #[test]
+    fn geschwindigkeit_wird_gemischt() {
+        let k = wuerfel(1.0);
+        // v = (z, 0, 0): linear in z, also interpoliert jedes Dreieck exakt.
+        let feld: Vec<[f64; 3]> = k.punkte.iter().map(|&q| [q[2], 0.0, 0.0]).collect();
+        let mut k2 = k.clone();
+        k2.setze_punktgeschwindigkeit(feld).expect("Feld passt");
+        for t in 0..k2.dreiecke.len() {
+            let [a, b, c] = k2.dreiecke[t].map(|i| k2.punkte[i as usize]);
+            let mitte = mul(add(add(a, b), c), 1.0 / 3.0);
+            for p in [a, b, c, mitte, add(a, mul(sub(b, a), 0.25))] {
+                let v = k2.geschwindigkeit_an(t, p, [9.0; 3]);
+                assert!(
+                    (v[0] - p[2]).abs() < 1e-12 && v[1] == 0.0 && v[2] == 0.0,
+                    "Dreieck {t}, Punkt {p:?}: {v:?}"
+                );
+            }
+        }
+        // Ein gleichförmiges Feld bleibt überall gleich (Summe der Gewichte 1).
+        let mut k3 = k.clone();
+        k3.setze_punktgeschwindigkeit(vec![[0.25, -0.5, 1.5]; k.punkte.len()]).expect("Feld passt");
+        for t in 0..k3.dreiecke.len() {
+            let v = k3.geschwindigkeit_an(t, k3.punkte[k3.dreiecke[t][0] as usize], [9.0; 3]);
+            assert!((v[0] - 0.25).abs() < 1e-15 && (v[1] + 0.5).abs() < 1e-15 && (v[2] - 1.5).abs() < 1e-15, "{v:?}");
+        }
+    }
+
+    /// Ohne Feld gilt weiter **eine** Geschwindigkeit für den ganzen Körper,
+    /// Bit für Bit: das ist der starre Fall, und der darf sich nicht ändern.
+    #[test]
+    fn ohne_feld_gilt_die_eine_geschwindigkeit() {
+        use crate::koerper::Koerper;
+        let starr = [0.3, -0.2, 0.1];
+        let k = wuerfel(1.0);
+        assert!(k.punktgeschwindigkeit.is_empty(), "frisch gebaut trägt kein Feld");
+        // Kontakt und Durchstoß geben genau den einen Wert weiter.
+        for p in [[1.02, 0.2, 0.5], [0.2, 1.02, 0.3]] {
+            let n = k.naechster(p, 0.05).expect("Kontakt in 2 cm");
+            assert_eq!(k.geschwindigkeit_an(n.dreieck as usize, n.punkt, starr), starr);
+        }
+        let (_, _, v) = k.durchstoss([1.5, 0.2, 0.5], [0.5, 0.2, 0.5], starr).expect("durch die Seite");
+        assert_eq!(v, starr);
+        let koerper = Koerper::Netz { netz: std::sync::Arc::new(k.clone()), versatz: [0.0; 3], geschwindigkeit: starr };
+        let kt = koerper.kontakt([1.02, 0.2, 0.5], 0.05).expect("Kontakt");
+        assert_eq!(kt.geschwindigkeit, starr);
+    }
+
+    /// Ein Feld, das nur an **einer** Ecke schnell ist, macht den Kontakt dort
+    /// genau so schnell und an der Gegenseite genau gar nicht — das ist der
+    /// Fall, den ein einzelner Wert für den ganzen Körper nicht kann (#96).
+    /// Die Proben liegen an Stellen, deren Schwerpunktgewichte exakt bekannt
+    /// sind: auf der Ecke (Gewicht 1), auf halber Kante (0,5 / 0,5) und auf der
+    /// Gegenseite, die die Ecke gar nicht kennt (drei Gewichte 0).
+    #[test]
+    fn geschwindigkeit_je_stelle_verschieden() {
+        use crate::koerper::Koerper;
+        let mut k = wuerfel(1.0);
+        let mut feld = vec![[0.0; 3]; k.punkte.len()];
+        // Punkt 7 = (1, 1, 1) bewegt sich nach unten, alle anderen stehen.
+        feld[7] = [0.0, 0.0, -1.0];
+        k.setze_punktgeschwindigkeit(feld).expect("Feld passt");
+        let koerper = Koerper::Netz { netz: std::sync::Arc::new(k), versatz: [0.0; 3], geschwindigkeit: [0.0; 3] };
+
+        // Auf der bewegten Ecke selbst: Gewicht 1, also die volle Geschwindigkeit.
+        let ecke = koerper.kontakt([1.02, 1.0, 1.0], 0.05).expect("Kontakt auf der Ecke 7");
+        assert_eq!(ecke.geschwindigkeit, [0.0, 0.0, -1.0], "auf der Ecke gilt die volle Geschwindigkeit");
+        // Auf halber Kante zwischen den Ecken 5 (1,−1,1) und 7 (1,1,1): halb.
+        let kante = koerper.kontakt([1.02, 0.0, 1.0], 0.05).expect("Kontakt auf halber Kante");
+        assert!(
+            (kante.geschwindigkeit[2] + 0.5).abs() < 1e-12,
+            "auf halber Kante muss es halb so schnell sein, nicht {:?}",
+            kante.geschwindigkeit
+        );
+        // Gegenseite x = −1 (Ecken 0, 2, 4, 6): kennt Ecke 7 nicht, bleibt stehen.
+        let gegenseite = koerper.kontakt([-1.02, 0.5, 0.5], 0.05).expect("Kontakt auf der Gegenseite");
+        assert_eq!(gegenseite.geschwindigkeit, [0.0; 3], "die Gegenseite steht still");
+    }
+
+    /// Ein Feld falscher Länge wird abgelehnt, statt still falsch zuzuordnen;
+    /// leer räumt es ab.
+    #[test]
+    fn punktgeschwindigkeit_laenge_geprueft() {
+        let mut k = wuerfel(1.0);
+        assert!(k.setze_punktgeschwindigkeit(vec![[0.0; 3]; 3]).unwrap_err().contains("Punkte"));
+        assert!(k.setze_punktgeschwindigkeit(vec![[1.0, 0.0, 0.0]; k.punkte.len()]).is_ok());
+        assert_eq!(k.punktgeschwindigkeit.len(), k.punkte.len());
+        assert!(k.setze_punktgeschwindigkeit(Vec::new()).is_ok());
+        assert!(k.punktgeschwindigkeit.is_empty());
+    }
+
+    /// Nachführen räumt das Geschwindigkeitsfeld ab: es gehörte zum alten
+    /// Punktstand. Ein bewegter Körper setzt es danach neu.
+    #[test]
+    fn nachfuehren_raeumt_das_feld_ab() {
+        let (p, d) = zylinder(0.15, -0.4, 0.4, 24, 8);
+        let mut k = Koerpernetz::neu(p.clone(), d, 0.01).unwrap();
+        k.setze_punktgeschwindigkeit(vec![[1.0, 0.0, 0.0]; k.punkte.len()]).unwrap();
+        k.nachfuehren(&p).expect("nachfuehren");
+        assert!(k.punktgeschwindigkeit.is_empty(), "das Feld ist nach dem Nachführen veraltet");
     }
 
     /// Falsch orientiert, nicht mannigfaltig oder nach innen gekehrt: Fehler.

@@ -787,6 +787,34 @@ plate stiffness through bending energy at a prescribed curvature.
 
 Model for the user interface: CLO help "New in…" (Glue Fill, Glue Brush).
 
+### Idea borrowed from outside: arrangement points as surface discs
+
+Not a plan entry of its own — a note on where 4c could go next, so the idea is
+not lost.
+
+`DEVIL-DESIGNER` (`github.com/Artbyo3/DEVIL-DESIGNER`, a Blender add-on,
+extensions.blender.org, **GPL-3.0-or-later**) places pattern pieces on the
+avatar by drawing *arrangement points* as discs on the body surface: the disc
+lies flat on the skin, scales with distance, is hidden by the body where it is
+on the far side, and **a mirrored arrangement point takes the twin piece in the
+same step** (`v0.12.0`, 2026-11-04). Clicking a disc places the piece.
+
+Read as a user interface idea, not as code: the licence forbids copying, and
+its simulating part is Blender's cloth solver, so nothing technical is gained
+there anyway.
+
+What could be taken over is the **two steps it collapses into one**. Today a
+piece is placed by `zone`, reference point, angle and height in the `.lage`
+file — a description, not a picture, and `gespiegelt` is one more line to keep
+in sync. A disc on the surface would be the same information (a point on the
+body, its normal, a side) but chosen where it is seen, and the mirrored piece
+would follow from the side alone. That fits `platzierung.rs` without a new
+concept: the disc is a body point plus a tangent frame, which the hull code
+already computes per centimetre around the torso and the arm.
+
+Undecided and not measured: whether discs are enough for pieces that must sit at
+a *height* (a waistband, a hem), or whether the two stay side by side.
+
 ## Stage 5 — Inspection output
 
 This is the actual purpose, not the display:
@@ -864,9 +892,9 @@ New since 2026-10-20 (ADR-018): the garment should also be checked in motion
 
 | Part | Content | Status |
 |---|---|---|
-| Body with skeleton | joints and skin weights for the body from stage 2, deformation via skinning (linear or dual quaternion). Built 2026-11-05 on the **free** MakeHuman body (issue #94): the 125 `joint-*` groups in `assets/3dobjs/makehuman/base.obj` give the joints, the weights are computed from the distance to the bone **segments** (own radius per bone, four influences, 16 smoothing rounds); `klon3d skelett`, `crates/klon3d-koerper/src/skelett.rs`. No CLO avatar data at all — open: dual quaternion instead of linear blend, garments follow the deformed body | built |
-| Motion data | read CLO's `.mtn` (joint sets with one 4×4 matrix per frame, finding 69); plus simple poses of our own (raise arm, take a step, twist torso) | pose of our own built (`Skelett::hebe_arme`, 90° side raise, `klon3d skelett --drehung`); `.mtn` open |
-| Contact with a moving body | body velocity in friction and collision, small substeps or continuous collision detection so that nothing slips through the arm; check the artificial damping of backward Euler (ADR-020); latex fits tightly, this is where usefulness is decided | open; for a body at rest or rigidly moved the penetration check already exists (finding 94), for deforming triangles it does not |
+| Body with skeleton | joints and skin weights for the body from stage 2, deformation via skinning (linear or dual quaternion). Built 2026-11-05 on the **free** MakeHuman body (issue #94): the 125 `joint-*` groups in `assets/3dobjs/makehuman/base.obj` give the joints, the weights are computed from the distance to the bone **segments** (own radius per bone, four influences, 16 smoothing rounds); `klon3d skelett`, `crates/klon3d-koerper/src/skelett.rs`. No CLO avatar data at all. Garments follow the deformed body since #96: the collider is the *same* MakeHuman mesh the skeleton deforms, re-posed and refilled per frame with `Koerpernetz::nachfuehren` (13 380 points, 26 756 triangles, 2.8–3.1 ms against 8.6–10.1 ms for `aus_clo_mm`, bit-identical results, `tests/nachfuehren.rs`). Open: dual quaternion instead of linear blend | built |
+| Motion data | read CLO's `.mtn` (joint sets with one 4×4 matrix per frame, finding 69); plus simple poses of our own (raise arm, take a step, twist torso) | pose of our own built (`Skelett::hebe_arme`, 90° side raise, `klon3d skelett --drehung`), and the raise runs through the solver: `tests/armheben.rs` lifts blouse v26 on the MakeHuman body in 60 frames of 1.5° (251–277 s dressing + ~13 s lift). Measured: sleeve moves 8.9 cm median / 23.4 cm at the outermost point, no penetration at any frame (lowest point +0.20 mm over all 60), open seam pairs 11 at rest → 5 at 90°. The sleeve-cap pull is **not** reproduced: the armpit band *relaxes* (+7.05 % → +1.62 %) because the hanging arm is pinched in the armpit. `.mtn` open |
+| Contact with a moving body | body velocity in friction and collision, small substeps or continuous collision detection so that nothing slips through the arm; check the artificial damping of backward Euler (ADR-020); latex fits tightly, this is where usefulness is decided | built for a body that is re-posed between frames: `Koerpernetz::punktgeschwindigkeit`, mixed by the barycentric weights of the hit point (`geschwindigkeit_an`), reaches friction and impact through `Kontakt.geschwindigkeit`; `nachfuehren` clears it, the caller re-sets it (`tests/armheben.rs`, 60 frames without penetration). Costs 4.0–5.6 ms per frame for pose + skinning + refill, against ~203 ms for the CPU solver of stage 4 - the 16.7 ms frame budget is **not** met and is not claimed. Open: a body that rides on `Koerper::verschoben` (only one constant velocity per substep), so rotation needs the re-pose; continuous collision detection; `.mtn` timing. Built on the CPU |
 | Self-collision | point–triangle and edge–edge handled separately (like CLO, finding 43), spatial hashing on the GPU | built on the CPU (finding 116: `selbstkollision.rs`, `anziehen --selbstkollision`, off by default); without layers/sub-layers; GPU open |
 | Output | frame sequence (OBJ per frame, later glTF), strain and distance map per frame (stage 5) | open |
 
@@ -874,6 +902,18 @@ New since 2026-10-20 (ADR-018): the garment should also be checked in motion
 test blouse v26 to 90° within one second: no penetration over 1 mm,
 the seams hold, the pull at sleeve cap and armpit shows up the way the user
 describes it on the real test garment; computation in real time or faster.
+
+Measured on 2026-11-05 (`tests/armheben.rs`, two runs): **no penetration over 1 mm
+at any of the 60 frames** (lowest point +0.20 mm), **the seams hold** (11 open
+pairs at rest → 5 at 90°), **the garment follows the arm** (sleeve 8.9 cm median,
+23.4 cm at the outermost point), **the pull at the sleeve cap does not show up** —
+the armpit band relaxes from +7.05 % to +1.62 % instead of tightening, because the
+hanging arm is pinched in the armpit; the real garment's stand-off comes from the
+cap's shape, which a seam list cannot express (the same reason fault 2 of the test
+blouse does not appear, see `bluse2_stehend`). **Real time is not reached and not
+claimed**: a frame costs ~203 ms, of which the deforming body is 4.0–5.6 ms; the
+remainder is the CPU solver of stage 4. Three of four points met, the fourth is a
+finding to be decided, not a defect of the motion path.
 
 ---
 
