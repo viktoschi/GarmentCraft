@@ -18,6 +18,9 @@
 //!                [--naehbilder <n>] [--einschwingen-max <n>] [--ohne-koerperpunkte]
 //!                [--material <profil|datei.zfab|stamm>]
 //!                [--obj <ordner>] [--ordner <Resizing>]
+//! klon3d bewegen <muster.sm2d> [--masse <datei.smis>] [--bilder <n>] [--grad <grad>]
+//!                [--out <ordner>] [--rechenweg implizit|gpu]
+//!                [--material <profil|datei.zfab|stamm>] [--ordner <makehuman>]
 //! ```
 //!
 //! `info` liest nur. `punkte` rechnet die Konstruktion aus und meldet, was
@@ -32,6 +35,7 @@
 //! [`klon3d_koerper::koerper`]) und schreibt die Gruppe `body` in mm.
 
 mod anziehen;
+mod bewegen;
 mod stoffwahl;
 mod umriss;
 
@@ -61,6 +65,7 @@ fn main() -> ExitCode {
         "koerper" => befehl_koerper(&args[1..]),
         "skelett" => befehl_skelett(&args[1..]),
         "anziehen" => anziehen::befehl_anziehen(&args[1..]),
+        "bewegen" => bewegen::befehl_bewegen(&args[1..]),
         "lage" => befehl_lage(&args[1..]),
         "zprj" => befehl_zprj(&args[1..]),
         "vergleich" => befehl_vergleich(&args[1..]),
@@ -155,6 +160,27 @@ fn hilfe() {
       --material nimmt ein eingebautes Profil (radical, retifist), einen Pfad
       auf eine .zfab, oder den Stamm eines Stoffs aus assets/stoffe (Vorgabe:
       0,4 mm Radical); --obj schreibt koerper.obj, anfang.obj und ende.obj (mm)
+
+  klon3d bewegen <muster.sm2d> [--masse <datei.smis>] [--bilder <n>]
+                 [--grad <grad>] [--out <ordner>]
+                 [--rechenweg implizit|gpu]
+                 [--material <profil|datei.zfab|stamm>] [--ordner <makehuman>]
+                 [--hoehe <cm>] [--kurz]
+      zieht das Muster an wie `anziehen` und hebt dann BEIDE Arme von 0 Grad
+      auf --grad (Vorgabe 90) in --bilder gleichen Schritten (Vorgabe 60);
+      die Haut verformt das Skelett auf dem freien MakeHuman-Koerper (CC0),
+      der Stoff folgt Bild fuer Bild mit Geschwindigkeit an jeder Stelle.
+      ACHTUNG: --bilder ist hier die ANZAHL der Bewegungsbilder, nicht ein
+      Ordner wie bei `anziehen`. Jedes Bild wird geschrieben, nicht jedes 60.:
+      bild_NNNN.obj (mm), dehnung_NNNN.csv, abstand_NNNN.csv, dazu lauf.csv
+      mit Bild, Grad, Zeit, tiefstem Punkt und offenen Nahtpaaren. Bild 0 ist
+      der angezogene Ruhezustand. --rechenweg gpu rechnet die Bewegungsbilder
+      auf dem Rechenwerk (ohne Adapter: Meldung und die CPU rechnet);
+      --kurz nimmt den kurzen Anziehplan (2 Bilder naehen, 2 einschwingen,
+      1 halten) zum Hinsehen. Die Masse des Koerpers kommt auf diesem Weg
+      NICHT aus der Massdatei: ein Skelett verformt nur seine eigene
+      Punktliste, und der Stoff muss gegen genau diese Haut stossen - die
+      Massdatei gibt hier nur die Koerperhoehe (--hoehe ueberschreibt sie)
 
   klon3d vergleich <a.obj> <b.obj> [--zelle <mm>] [--csv <datei>] [--farben <ordner>]
       stellt zwei Netze gegeneinander (Stufe 5): Abstand jedes Knotens zur
