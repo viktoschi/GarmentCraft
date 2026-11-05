@@ -39,6 +39,7 @@ pub mod nacharbeit_referenz;
 pub mod person;
 pub mod ringecken;
 pub mod silhouette;
+pub mod skelett;
 pub mod spur;
 
 /// Ein Punkt im Raum. Millimeter, y nach oben — die Konvention von

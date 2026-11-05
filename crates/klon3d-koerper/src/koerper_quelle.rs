@@ -56,6 +56,9 @@ pub const ZIELE: [&str; 2] = [
 /// The group of the naked body.
 pub const KOERPER_GRUPPE: &str = "body";
 
+/// Prefix of the joint markers: every group `joint-<name>` marks one joint.
+pub const GELENK_PREFIX: &str = "joint-";
+
 /// File units to millimetres: `base.obj` and the targets count in decimetres.
 pub const SKALA: f64 = 100.0;
 
@@ -261,32 +264,35 @@ pub fn ordner() -> Option<PathBuf> {
 /// [`crate::massband::zentriert_cm`] gives CLO's meshes, which
 /// [`crate::rumpf`] needs to find the ring around the body axis.
 pub fn einpassen(netz: &mut Netz, hoehe_mm: f64) {
-    let Some((lo, hi)) = netz.hoehe() else {
+    let Some((f, ab)) = einpassung(netz, hoehe_mm) else {
         return;
     };
-    let ist = hi - lo;
-    if ist <= 0.0 || hoehe_mm <= 0.0 {
-        return;
-    }
-    let f = hoehe_mm / ist;
     for p in &mut netz.punkte {
         for a in 0..3 {
-            p[a] *= f;
+            p[a] = p[a] * f - ab[a];
         }
     }
-    let n = netz.punkte.len() as f64;
-    let mx = netz.punkte.iter().map(|p| p[0]).sum::<f64>() / n;
-    let mz = netz.punkte.iter().map(|p| p[2]).sum::<f64>() / n;
-    let my = netz
-        .punkte
-        .iter()
-        .map(|p| p[1])
-        .fold(f64::INFINITY, f64::min);
-    for p in &mut netz.punkte {
-        p[0] -= mx;
-        p[1] -= my;
-        p[2] -= mz;
+}
+
+/// The factor and offset of [`einpassen`]: `p' = p · f - ab`.
+///
+/// Split out because the joints have to travel through **the same** mapping as
+/// the skin: a joint that is scaled with a different factor sits beside the
+/// body, and every weight then points to the wrong place.
+pub fn einpassung(netz: &Netz, hoehe_mm: f64) -> Option<(f64, Punkt3)> {
+    let (lo, hi) = netz.hoehe()?;
+    let ist = hi - lo;
+    if ist <= 0.0 || hoehe_mm <= 0.0 || netz.punkte.is_empty() {
+        return None;
     }
+    let f = hoehe_mm / ist;
+    let n = netz.punkte.len() as f64;
+    let mx = netz.punkte.iter().map(|p| p[0]).sum::<f64>() / n * f;
+    let mz = netz.punkte.iter().map(|p| p[2]).sum::<f64>() / n * f;
+    // Der tiefste Punkt erst nach dem Massstab - in dieser Reihenfolge rechnet
+    // auch `einpassen`, sonst steht der Körper nicht auf y = 0.
+    let my = netz.punkte.iter().map(|p| p[1] * f).fold(f64::INFINITY, f64::min);
+    Some((f, [mx, my, mz]))
 }
 
 /// MakeHuman's body from a folder with `base.obj` and the targets of
@@ -297,6 +303,33 @@ pub fn makehuman(ordner: &Path, hoehe_mm: f64) -> Result<Netz, String> {
 
 /// Like [`makehuman`], with an explicit list of target files.
 pub fn makehuman_mit(ordner: &Path, hoehe_mm: f64, ziele: &[&str]) -> Result<Netz, String> {
+    makehuman_mit_gelenken_mit(ordner, hoehe_mm, ziele).map(|(netz, _)| netz)
+}
+
+/// Like [`makehuman`], and also the **joints** of the same file, in the same
+/// frame as the skin.
+///
+/// Each group `joint-<name>` is a small cube; its centre is the joint. The
+/// joints travel through the very mapping the skin does (scale, then centre,
+/// then lowest point at `y = 0`), which is why [`einpassen`] and this function
+/// share [`einpassung`].
+///
+/// The **order** is the file's order - no sorting here. That is the order
+/// MakeHuman writes, and it is what
+/// [`crate::skelett::Skelett::aus_gelenken`] sorts by depth.
+pub fn makehuman_mit_gelenken(
+    ordner: &Path,
+    hoehe_mm: f64,
+) -> Result<(Netz, Vec<(String, Punkt3)>), String> {
+    makehuman_mit_gelenken_mit(ordner, hoehe_mm, &ZIELE)
+}
+
+/// The shared body of [`makehuman_mit`] and [`makehuman_mit_gelenken`].
+pub fn makehuman_mit_gelenken_mit(
+    ordner: &Path,
+    hoehe_mm: f64,
+    ziele: &[&str],
+) -> Result<(Netz, Vec<(String, Punkt3)>), String> {
     let basis = ordner.join(BASIS);
     let mut roh = Rohteil::lies(&basis).map_err(|e| e.to_string())?;
     let pfade: Vec<PathBuf> = ziele.iter().map(|z| ordner.join(z)).collect();
@@ -309,8 +342,46 @@ pub fn makehuman_mit(ordner: &Path, hoehe_mm: f64, ziele: &[&str]) -> Result<Net
             p[a] *= SKALA;
         }
     }
+    // Die eine Abbildung, die Haut und Gelenke gemeinsam durchlaufen.
+    let (f, ab) = einpassung(&netz, hoehe_mm)
+        .ok_or_else(|| "Einpassung des Körpers nicht bestimmbar".to_string())?;
     einpassen(&mut netz, hoehe_mm);
-    Ok(netz)
+
+    let mut gelenke = Vec::new();
+    for (name, dreiecke) in &roh.gruppen {
+        let Some(gelenk) = crate::skelett::gelenkname(name) else {
+            continue;
+        };
+        // A joint marker is a small cube; repeated corners count once, so the
+        // centre is the cube's centre and not weighted by how often a corner
+        // appears in its triangles.
+        let mut ecken: Vec<usize> = Vec::new();
+        for d in dreiecke {
+            for &k in d {
+                if !ecken.contains(&k) {
+                    ecken.push(k);
+                }
+            }
+        }
+        if ecken.is_empty() {
+            return Err(format!("Gelenk {gelenk:?} hat keine Punkte"));
+        }
+        let n = ecken.len() as f64;
+        let mut mitte = [0.0f64; 3];
+        for &k in &ecken {
+            for a in 0..3 {
+                mitte[a] += roh.punkte[k][a] * SKALA;
+            }
+        }
+        for a in 0..3 {
+            mitte[a] = mitte[a] / n * f - ab[a];
+        }
+        gelenke.push((gelenk.to_string(), mitte));
+    }
+    if gelenke.is_empty() {
+        return Err("keine joint-*-Gruppe in base.obj".to_string());
+    }
+    Ok((netz, gelenke))
 }
 
 /// Group names of a file with how many triangles each holds - for the docs

@@ -59,6 +59,7 @@ fn main() -> ExitCode {
         "netz" => befehl_netz(&args[1..]),
         "roehre" => befehl_roehre(&args[1..]),
         "koerper" => befehl_koerper(&args[1..]),
+        "skelett" => befehl_skelett(&args[1..]),
         "anziehen" => anziehen::befehl_anziehen(&args[1..]),
         "lage" => befehl_lage(&args[1..]),
         "zprj" => befehl_zprj(&args[1..]),
@@ -130,6 +131,17 @@ fn hilfe() {
       Taille und Huefte nach, was ueber CLO hinausgeht; --wie-clo laesst das
       weg und gibt den Koerper genau wie die Kette; --out schreibt die
       Groesse als OBJ
+
+  klon3d skelett [--out <koerper.obj>] [--drehung <grad>] [--ordner <makehuman>]
+                 [--hoehe <cm>]
+      Stufe 7: Skelett, Hautgewichte und Verformung auf dem freien MakeHuman-
+      Koerper (CC0). Liest Gelenke aus denselben joint-*-Gruppen, rechnet die
+      Gewichte aus dem Abstand zu den Knochenstrecken (vier Einfluesse, je
+      Knochen eigener Radius) und meldet die Abnahme bei 90 Grad Armheben:
+      ferne Kanten (ueber 120 mm von der Schulter) duerfen sich hoechstens
+      verdoppeln und um hoechstens 10 mm wachsen, die Binde-Pose muss den
+      Koerper unveraendert lassen; --drehung hebt um einen anderen Winkel,
+      --out schreibt den verformten Koerper als OBJ (mm)
 
   klon3d anziehen <muster.sm2d> [--masse <datei.smis>] [--naehte <datei>]
                   [--lage <datei>] [--naehen <m/s>] [--naehbilder <n>]
@@ -1092,6 +1104,138 @@ fn befehl_koerper(args: &[String]) -> ExitCode {
         println!("  geschrieben  {} (mm)", aus.display());
     }
     ExitCode::SUCCESS
+}
+
+// ─────────────────────────────────────────────────────────── skelett ──
+
+fn befehl_skelett(args: &[String]) -> ExitCode {
+    use klon3d_koerper::skelett;
+
+    const AUFRUF: &str = "Aufruf: klon3d skelett [--out <koerper.obj>] [--drehung <grad>] [--ordner <makehuman>] [--hoehe <cm>]";
+    let mut aus = None;
+    let mut ordner = klon3d_koerper::koerper_quelle::ordner();
+    let mut drehung = 90.0f64;
+    let mut hoehe_cm = 160.0f64;
+    let mut i = 0;
+    while i < args.len() {
+        match args[i].as_str() {
+            o @ ("--out" | "--ordner" | "--drehung" | "--hoehe") => {
+                let Some(w) = args.get(i + 1) else {
+                    eprintln!("{o} ohne Wert\n{AUFRUF}");
+                    return ExitCode::FAILURE;
+                };
+                match o {
+                    "--out" => aus = Some(PathBuf::from(w)),
+                    "--ordner" => ordner = Some(PathBuf::from(w)),
+                    "--drehung" => match w.parse::<f64>() {
+                        Ok(v) => drehung = v,
+                        Err(_) => {
+                            eprintln!("{w:?} ist kein Winkel\n{AUFRUF}");
+                            return ExitCode::FAILURE;
+                        }
+                    },
+                    _ => match w.parse::<f64>() {
+                        Ok(v) if v > 0.0 => hoehe_cm = v,
+                        _ => {
+                            eprintln!("{w:?} ist keine Hoehe\n{AUFRUF}");
+                            return ExitCode::FAILURE;
+                        }
+                    },
+                }
+                i += 2;
+            }
+            a => {
+                eprintln!("unerwartetes Argument {a:?}\n{AUFRUF}");
+                return ExitCode::FAILURE;
+            }
+        }
+    }
+    let Some(ordner) = ordner else {
+        eprintln!(
+            "{} nicht gefunden (MakeHuman-Assets fehlen)",
+            klon3d_koerper::koerper_quelle::ORDNER
+        );
+        return ExitCode::FAILURE;
+    };
+
+    let t0 = std::time::Instant::now();
+    let (netz, skelett) = match skelett::baue(&ordner, hoehe_cm * 10.0) {
+        Ok(v) => v,
+        Err(e) => {
+            eprintln!("Skelett nicht baubar: {e}");
+            return ExitCode::FAILURE;
+        }
+    };
+    println!("MakeHuman-Koerper {}", ordner.display());
+    println!(
+        "  {} Punkte, {} Dreiecke, {:.1} cm hoch ({:.1} s)",
+        netz.punkte.len(),
+        netz.dreiecke.len(),
+        netz.hoehe().map_or(0.0, |(a, b)| (b - a) / 10.0),
+        t0.elapsed().as_secs_f64()
+    );
+    println!(
+        "  Skelett      {} Gelenke, {} Knochen tragen Gewichte",
+        skelett.gelenke.len(),
+        skelett.knochen.len()
+    );
+    println!(
+        "  Gewichte     hoechstens {} je Punkt, Summenabweichung {:.1e}, {} Punkte ohne Gewicht",
+        skelett.einfluesse_max(),
+        skelett.gewichtssumme_abweichung(),
+        skelett.gewichte.iter().filter(|g| g.is_empty()).count()
+    );
+    println!("  Radien der grossen Knochen (mm, Untergrenze {}):", skelett::RADIUS_MIN as i64);
+    for n in [
+        "spine-1", "spine-2", "l-clavicle", "l-shoulder", "l-elbow", "l-hand", "neck", "head-2",
+    ] {
+        if let Some(r) = skelett.radius(n) {
+            println!("    {n:<12} {r:8.3}");
+        }
+    }
+
+    let mut s = skelett.clone();
+    s.hebe_arme(drehung);
+    let Some(neu) = s.verforme(&netz.punkte) else {
+        eprintln!("Verformung nicht moeglich (Binde-Matrix nicht starr)");
+        return ExitCode::FAILURE;
+    };
+    let Some(ab) = skelett.abnahme(&netz.punkte, &netz.dreiecke, drehung) else {
+        eprintln!("Abnahme nicht messbar");
+        return ExitCode::FAILURE;
+    };
+    println!("  Armheben {drehung:.0} Grad:");
+    println!(
+        "    ferne Kanten {}: ueber 2x {}, ueber 10 mm {}, groesstes Verhaeltnis {:.3}",
+        ab.fern_kanten, ab.fern_ueber_doppelt, ab.fern_ueber_10mm, ab.fern_max
+    );
+    println!(
+        "    nahe Kanten  {}: Verhaeltnis {:.2} bis {:.2}, davon unter 0.2 {}",
+        ab.nah_kanten, ab.nah_min, ab.nah_max, ab.nah_kollaps
+    );
+    println!(
+        "    Schulter     Abstand zum Gelenk Median {:.3}, Minimum {:.3}",
+        ab.schulter_median, ab.schulter_min
+    );
+    println!("    Binde-Pose   groesster Weg {:.1e} mm", ab.binde_abweichung);
+
+    let bestanden = ab.bestanden();
+    if let Some(aus) = aus {
+        let mut n = netz.clone();
+        n.punkte = neu;
+        if let Err(e) = klon3d_koerper::schreibe_obj(&aus, &n, 1.0) {
+            eprintln!("{}: {e}", aus.display());
+            return ExitCode::FAILURE;
+        }
+        println!("  geschrieben  {} (mm)", aus.display());
+    }
+    if bestanden {
+        println!("  Abnahme      bestanden");
+        ExitCode::SUCCESS
+    } else {
+        println!("  Abnahme      NICHT bestanden");
+        ExitCode::FAILURE
+    }
 }
 
 // ─────────────────────────────────────────────────────────── punkte ──
