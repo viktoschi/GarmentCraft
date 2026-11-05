@@ -50,7 +50,7 @@ use std::sync::Arc;
 
 use eframe::{egui, egui_wgpu, wgpu};
 
-use crate::karten::{Karte, Kartenwerte, KOMFORT_ABSTAND_MM};
+use crate::karten::{Karte, Kartenwerte, Skalen, KOMFORT_ABSTAND_MM};
 use crate::simulation::{Bau, Schnappschuss};
 
 /// Sample count of the pass (see the module documentation).
@@ -153,6 +153,11 @@ pub struct Ansicht3d {
     pub pitch: f64,
     /// Draw the cloth edges as a wireframe.
     pub netz: bool,
+    /// Where the upper end of each map's colour scale sits.
+    ///
+    /// It belongs here rather than to the menu: the vertex data is rebuilt when this changes, and
+    /// the cloth colours, the legend and the value box all read the same number from it.
+    pub skalen: Skalen,
     /// The scene was framed; a later frame with content leaves the user's camera alone.
     eingepasst: bool,
     /// What the built vertex data belongs to.
@@ -177,6 +182,13 @@ struct Stand {
     /// for it arrive with the next snapshot. Colouring with the selection would paint the old
     /// numbers on the new ramp for one frame.
     karte: Option<Karte>,
+    /// Upper end of that map's scale, in thousandths of its unit.
+    ///
+    /// Part of the state because a moved end changes the vertex colours: the numbers stay the same,
+    /// but the data has to be rebuilt with the new ramp. Thousandths keep the comparison exact
+    /// without carrying a float through an `Eq`, and are far finer than a legible step on the
+    /// 64-step bar.
+    bis_milli: i64,
 }
 
 impl Default for Ansicht3d {
@@ -187,6 +199,7 @@ impl Default for Ansicht3d {
             yaw: 0.0,
             pitch: 0.08,
             netz: false,
+            skalen: Skalen::default(),
             eingepasst: false,
             stand: None,
             daten: None,
@@ -214,8 +227,13 @@ impl Ansicht3d {
     }
 
     /// Back to the default camera; the next frame frames the scene again.
+    ///
+    /// The map scales survive: they are a reading setting with their own reset per map, and a
+    /// camera reset that silently undid them would be a surprise.
     pub fn zuruecksetzen(&mut self) {
+        let skalen = self.skalen;
         *self = Ansicht3d::default();
+        self.skalen = skalen;
     }
 
     /// Target, distance and angles that show the whole scene: the middle of the box around body
@@ -282,6 +300,7 @@ impl Ansicht3d {
             netz: self.netz,
             thema_hell,
             karte,
+            bis_milli: karte.map_or(0, |k| milli(self.skalen.bis(k))),
         }
     }
 
@@ -371,10 +390,11 @@ impl Ansicht3d {
         ));
         // After the callback: the shapes painted after it lie on top of the 3D image.
         if let Some((karte, werte)) = karten_werte(bild) {
-            legende(ui, &maler, rect, karte, werte, !bau.koerper.is_empty());
+            let bis = self.skalen.bis(karte);
+            legende(ui, &maler, rect, karte, bis, werte, !bau.koerper.is_empty());
             if let Some(zeiger) = resp.hover_pos() {
                 if let Some(wert) = wert_unter(rect, self, &bild.x, werte, zeiger) {
-                    wert_hinweis(ui, &maler, rect, zeiger, karte, wert);
+                    wert_hinweis(ui, &maler, rect, zeiger, karte, bis, wert);
                 }
             }
         }
@@ -543,7 +563,9 @@ fn bauen(
         .map(|i| *i as usize + 1)
         .max()
         .unwrap_or(0);
-    let farben: Option<Vec<[f32; 3]>> = karte.map(|k| k.farben()).filter(|f| f.len() >= gebraucht);
+    let farben: Option<Vec<[f32; 3]>> = karte
+        .map(|k| k.farben_bis(kamera.skalen.bis(k.karte)))
+        .filter(|f| f.len() >= gebraucht);
 
     // (corners, colour, centre distance from the eye)
     let mut dreiecke: Vec<([u32; 3], [f32; 3], f64)> =
@@ -765,8 +787,9 @@ fn karten_werte(bild: &Schnappschuss) -> Option<(Karte, &Kartenwerte)> {
     bild.karte.as_ref().map(|w| (w.karte, w))
 }
 
-/// A number the way the rest of the window writes it: German comma, one decimal at most.
-fn zahl_text(v: f64) -> String {
+/// A number the way the rest of the window writes it: German comma, one decimal at most, and
+/// `-` for a value that is not finite. Public so the toolbar's scale control writes the same.
+pub fn zahl_text(v: f64) -> String {
     if !v.is_finite() {
         return "–".to_string();
     }
@@ -793,7 +816,7 @@ fn feld_grund(vis: &egui::Visuals) -> egui::Color32 {
 }
 
 /// What the map does not say by its title and scale alone.
-fn notizen(karte: Karte, hat_koerper: bool) -> Vec<String> {
+fn notizen(karte: Karte, hat_koerper: bool, werte: &Kartenwerte, bis: f64) -> Vec<String> {
     let mut zeilen = match karte {
         Karte::Dehnung => vec!["größte Hauptdehnung".to_string()],
         Karte::Passform => vec![
@@ -805,25 +828,53 @@ fn notizen(karte: Karte, hat_koerper: bool) -> Vec<String> {
             ),
         ],
         Karte::Abstand => vec!["0 mm = auf der Haut · darunter blau".to_string()],
+        Karte::Spannung => {
+            let mut z = vec!["größte Hauptmembrankraft".to_string()];
+            // The default end is the 10 % line of the reference material; a moved end is the
+            // reader's own choice and must not claim that.
+            if bis == karte.bis() {
+                z.push(format!(
+                    "{} {} = Grenze der linearen Dehnung",
+                    zahl_text(bis),
+                    karte.einheit()
+                ));
+            }
+            z
+        }
     };
     if !hat_koerper && karte == Karte::Passform {
         // Without a body only the strain half can be measured; saying so is better than letting
         // the scale look like the whole picture.
         zeilen.push("ohne Körper: nur Dehnung".to_string());
     }
+    if karte == Karte::Spannung {
+        if werte.ohne_steifigkeit > 0 {
+            // 0 N/m from missing stiffness is not the same statement as 0 N/m from slack cloth,
+            // and the colour cannot tell them apart.
+            zeilen.push(format!(
+                "{} ohne Steifigkeit: 0 N/m",
+                werte.ohne_steifigkeit
+            ));
+        }
+        // With one material this is the strain map with other axis labels; saying so keeps the
+        // colour from promising more than it delivers.
+        zeilen.push("ein Stoff: Dehnung × Steifigkeit".to_string());
+    }
     zeilen
 }
 
-/// The legend of the map on screen, bottom left: title, fixed scale with its unit, the ramp and
-/// the notes that keep the colours readable.
+/// The legend of the map on screen, bottom left: title, scale with its unit, the ramp and the
+/// notes that keep the colours readable.
 ///
-/// The bar is drawn from [`Karte::farbe`], the same bytes the garment is coloured with (there
-/// converted to linear light for the shader), so bar and cloth cannot drift apart.
+/// The bar is drawn from [`Karte::farbe_bis`], the same bytes the garment is coloured with (there
+/// converted to linear light for the shader), so bar and cloth cannot drift apart. `bis` is the
+/// upper end in effect — the map's default or the reader's own.
 fn legende(
     ui: &egui::Ui,
     maler: &egui::Painter,
     rect: egui::Rect,
     karte: Karte,
+    bis: f64,
     werte: &Kartenwerte,
     hat_koerper: bool,
 ) {
@@ -844,13 +895,13 @@ fn legende(
         &format!(
             "{} … {} {}",
             zahl_text(karte.von()),
-            zahl_text(karte.bis()),
+            zahl_text(bis),
             karte.einheit()
         ),
         egui::FontId::monospace(11.0),
         vis.text_color(),
     );
-    for text in notizen(karte, hat_koerper) {
+    for text in notizen(karte, hat_koerper, werte, bis) {
         anfuegen(&text, egui::FontId::proportional(11.0), vis.text_color());
     }
     // The grey of the ramp is not on the ramp: it marks points the measure could not reach.
@@ -898,14 +949,14 @@ fn legende(
         let t0 = i as f32 / schritte as f32;
         let t1 = (i + 1) as f32 / schritte as f32;
         let mitte = (t0 + t1) / 2.0;
-        let wert = karte.von() + (karte.bis() - karte.von()) * mitte as f64;
+        let wert = karte.von() + (bis - karte.von()) * mitte as f64;
         maler.rect_filled(
             egui::Rect::from_min_max(
                 egui::pos2(balken.left() + balken.width() * t0, balken.top()),
                 egui::pos2(balken.left() + balken.width() * t1, balken.bottom()),
             ),
             0.0,
-            egui_farbe(karte.farbe(wert)),
+            egui_farbe(karte.farbe_bis(wert, bis)),
         );
     }
     maler.rect_stroke(
@@ -984,6 +1035,7 @@ fn wert_hinweis(
     rect: egui::Rect,
     zeiger: egui::Pos2,
     karte: Karte,
+    bis: f64,
     wert: f64,
 ) {
     let vis = ui.visuals();
@@ -1020,7 +1072,7 @@ fn wert_hinweis(
         ),
         egui::vec2(10.0, 10.0),
     );
-    maler.rect_filled(kante, 2.0, egui_farbe(karte.farbe(wert)));
+    maler.rect_filled(kante, 2.0, egui_farbe(karte.farbe_bis(wert, bis)));
     maler.galley(
         egui::pos2(feld.left() + LEGENDE_RAND + 14.0, feld.top() + LEGENDE_RAND),
         galley,
@@ -1364,6 +1416,19 @@ impl Vorrat {
 #[cfg(test)]
 mod tests {
     use super::mittel_farbe;
+
+    /// A camera reset puts back the camera, not the reading: the map scales stay where the reader
+    /// put them, because each has its own reset.
+    #[test]
+    fn kamera_zuruecksetzen_laesst_die_skalen_stehen() {
+        let mut a = super::Ansicht3d::default();
+        a.yaw = 0.7;
+        a.skalen.setzen(super::Karte::Spannung, 80.0);
+        a.zuruecksetzen();
+        assert_eq!(a.yaw, 0.0, "die Kamera steht wieder auf der Vorgabe");
+        assert_eq!(a.skalen.bis(super::Karte::Spannung), 80.0);
+        assert!(!a.skalen.ist_vorgabe(super::Karte::Spannung));
+    }
 
     /// Two triangles of a four-point cloth must not both take the colours of the first three
     /// points: the mean has to use the corners the triangle itself names.

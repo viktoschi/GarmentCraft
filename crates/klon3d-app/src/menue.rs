@@ -409,6 +409,7 @@ fn anzeige(app: &mut App, ui: &mut egui::Ui) {
         karte_haken(ui, app, Karte::Dehnung, "Alt+7");
         karte_haken(ui, app, Karte::Passform, "Alt+8");
         karte_haken(ui, app, Karte::Abstand, "");
+        karte_haken(ui, app, Karte::Spannung, "Alt+6");
     });
     ui.menu_button("2D-Schnitt", |ui| {
         let a = app.ansicht.anzeige;
@@ -620,6 +621,7 @@ pub fn werkzeugleiste_3d(app: &mut App, ui: &mut egui::Ui) {
         (Karte::Dehnung, "Alt+7"),
         (Karte::Passform, "Alt+8"),
         (Karte::Abstand, ""),
+        (Karte::Spannung, "Alt+6"),
     ] {
         let an = app.simulation.karte() == Some(karte);
         let hinweis = if kuerzel.is_empty() {
@@ -638,6 +640,58 @@ pub fn werkzeugleiste_3d(app: &mut App, ui: &mut egui::Ui) {
                 Some(karte)
             }));
         }
+    }
+    // The scale of the map that is on screen. Every map keeps its own end, so switching the map
+    // shows that map's number; a map that is not shown has nothing to colour and needs no slider.
+    if let Some(karte) = app.simulation.karte() {
+        ui.separator();
+        skala(app, ui, karte);
+    }
+}
+
+/// Upper end of `karte`'s colour scale: the number in effect, editable, with a reset beside it.
+///
+/// The lower end is not offered: it carries the meaning of the map (0 %, 0 mm, 0 N/m), and only
+/// the upper end decides how much of the garment reaches the warm colour. Both this control and
+/// the legend read [`crate::karten::Skalen`], so cloth and bar cannot drift apart.
+fn skala(app: &mut App, ui: &mut egui::Ui, karte: Karte) {
+    let vorgabe = karte.bis();
+    let mut bis = app.ansicht3d.skalen.bis(karte);
+    ui.label("Skala bis");
+    // Ten times the default is a generous ceiling that still keeps the drag usable; anything
+    // below the lower end would have no ramp and is refused by `Skalen::setzen` anyway.
+    let grenze = vorgabe * 10.0;
+    let r = ui
+        .add(
+            egui::DragValue::new(&mut bis)
+                .speed((vorgabe / 200.0).max(1e-6))
+                .range((karte.von() + 1e-6)..=grenze)
+                .max_decimals(2)
+                .suffix(format!(" {}", karte.einheit())),
+        )
+        .on_hover_text(format!(
+            "oberes Ende der {} – Vorgabe {}. Die Werte selbst bleiben unverändert, nur ihre \
+             Farbe ändert sich.",
+            karte.titel(),
+            crate::ansicht3d::zahl_text(vorgabe)
+        ));
+    if r.changed() {
+        app.ansicht3d.skalen.setzen(karte, bis);
+        // The cloth is coloured from the new ramp in the same frame, not on the next snapshot.
+        ui.ctx().request_repaint();
+    }
+    let verschoben = !app.ansicht3d.skalen.ist_vorgabe(karte);
+    if ui
+        .add_enabled(verschoben, Button::new("zurücksetzen"))
+        .on_hover_text(format!(
+            "wieder auf die Vorgabe {}",
+            crate::ansicht3d::zahl_text(vorgabe)
+        ))
+        .on_disabled_hover_text("steht schon auf der Vorgabe")
+        .clicked()
+    {
+        app.ansicht3d.skalen.zuruecksetzen(karte);
+        ui.ctx().request_repaint();
     }
 }
 

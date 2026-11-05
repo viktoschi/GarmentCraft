@@ -236,7 +236,7 @@ impl App {
 }
 
 /// Every shortcut with what it does, in the order of the help window.
-pub const TASTENKUERZEL: [(&str, &str); 22] = [
+pub const TASTENKUERZEL: [(&str, &str); 23] = [
     ("Strg+O", "Muster öffnen"),
     ("Strg+Q", "Beenden"),
     ("Strg+Tab", "zwischen 3D- und 2D-Fenster wechseln"),
@@ -250,6 +250,7 @@ pub const TASTENKUERZEL: [(&str, &str); 22] = [
     ("Leertaste", "Simulation starten/anhalten"),
     ("Alt+7", "Dehnungskarte anzeigen ein/aus"),
     ("Alt+8", "Passformkarte anzeigen ein/aus"),
+    ("Alt+6", "Spannungskarte anzeigen ein/aus"),
     ("Esc", "Auswahl aufheben, Dialog schließen"),
     ("Mausrad", "Zoom um den Mauszeiger"),
     ("Ziehen", "Ansicht verschieben"),

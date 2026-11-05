@@ -50,7 +50,7 @@ use crate::ansicht2d::Ansicht2d;
 use crate::ansicht3d::{Ansicht3d, Blickwinkel};
 use crate::bibliothek::Bibliothek;
 use crate::dateiwahl::{auflisten, passt, Dateiwahl, Zweck};
-use crate::karten::Karte;
+use crate::karten::{Karte, Skalen, SCHLUESSEL_SKALEN};
 use crate::muster::{
     dateiname, delta4, dxf_ausgabe, naehte_vorschlagen, nahtliste_neben, netz_pruefen,
     obj_aus_muster, Ladeauftrag, Ladefehler, Muster, Nahtstand, Nahtvorschlag, Netzauftrag,
@@ -263,6 +263,9 @@ impl App {
             .unwrap_or_else(|| PathBuf::from("."));
         let mut ansicht = Ansicht2d::default();
         ansicht.anzeige = Anzeige2d::aus_text(&lies(SCHLUESSEL_ANZEIGE2D).unwrap_or_default());
+        // The maps' upper ends; an older settings file has no key and every map keeps its default.
+        let mut ansicht3d = Ansicht3d::default();
+        ansicht3d.skalen = Skalen::aus_text(&lies(SCHLUESSEL_SKALEN).unwrap_or_default());
         let stoffordner = anordnung::stoffordner();
         let stoffe = stoffordner
             .as_deref()
@@ -299,7 +302,7 @@ impl App {
             datei_menue_offen: false,
             anordnung: Anordnung::aus_text(&lies(SCHLUESSEL_ANORDNUNG).unwrap_or_default()),
             aktiv: Fenster::Zwei,
-            ansicht3d: Ansicht3d::default(),
+            ansicht3d,
             simulation: Simulation::neu(),
             gpu_format: None,
             stoff: None,
@@ -1014,6 +1017,7 @@ impl App {
             leertaste,
             karte_dehnung,
             karte_passform,
+            karte_spannung,
         ) = ctx.input_mut(|i| {
             (
                 // Ctrl must match exactly, so plain Tab below does not see Ctrl+Tab.
@@ -1029,10 +1033,12 @@ impl App {
                 // CLO's shortcut for start/hold; consumed, so egui does not press a focused
                 // button with it as well.
                 i.consume_key(Modifiers::NONE, Key::Space),
-                // The two inspection maps of the issue have shortcuts; the distance map does
-                // not (Alt+9 stays free for it if it ever gets one).
+                // The inspection maps of the issue have shortcuts; the distance map does not
+                // (Alt+9 stays free for it if it ever gets one).
                 i.consume_key(Modifiers::ALT, Key::Num7),
                 i.consume_key(Modifiers::ALT, Key::Num8),
+                // Stress sits on Alt+6, in front of strain: the task numbers it first.
+                i.consume_key(Modifiers::ALT, Key::Num6),
             )
         });
         if leertaste {
@@ -1043,6 +1049,9 @@ impl App {
         }
         if karte_passform {
             self.karte_umschalten(Karte::Passform);
+        }
+        if karte_spannung {
+            self.karte_umschalten(Karte::Spannung);
         }
         if f {
             self.aktion(Aktion::Einpassen);
@@ -1230,6 +1239,7 @@ impl eframe::App for App {
         storage.set_string(SCHLUESSEL_ORDNER, self.letzter_ordner.display().to_string());
         storage.set_string(SCHLUESSEL_ANORDNUNG, self.anordnung.als_text());
         storage.set_string(SCHLUESSEL_ANZEIGE2D, self.ansicht.anzeige.als_text());
+        storage.set_string(SCHLUESSEL_SKALEN, self.ansicht3d.skalen.als_text());
         storage.set_string(
             SCHLUESSEL_ZULETZT,
             anordnung::zuletzt_als_text(&self.zuletzt),
