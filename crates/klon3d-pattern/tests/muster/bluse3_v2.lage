@@ -9,7 +9,20 @@
 # Rueckenblock (Rueckenteil Mitte) haengen je an einem Bezugspunkt der vorderen bzw. hinteren Mitte
 # und liegen zueinander wie im Muster; die Seitenteile sitzen mit dem Armloch an der Seite.
 # Vorderteile sind von aussen gesehen gezeichnet, Rueckenteile und Aermel gespiegelt dazu.
-# Nicht platziert (aufgeklebt, kommt mit den Klebezonen): Trim Oeffnung, Stehkragen Aussen, Donut, Scheiben.
+# Aufgeklebte Teile (Trim, Aussenkragen, Donut, Scheiben) haben keinen eigenen Rahmen im Muster: sie
+# liegen auf dem Teil, auf das sie geklebt werden (`auf <Traeger>` oder `auf <Traeger>:<Punkt>`, ohne
+# eigene Zone, Umfang und Hoehe), und werden mit `klebt <Teil>` gebunden.
+#   Bezugspunkt (Feld 3) ist bei den Teilen, die im Muster denselben Knoten haben wie ihr Traeger, dieser
+#   Knoten (Trim: VK0; Aussenkragen: KOL, KOL0, KOR0, KOR liegen gleich); bei Donut und ganzen Scheiben
+#   `-`, dann ist es die Mitte des Teils (exakt der Kreismittelpunkt); bei den halben Scheiben HH2, das
+#   Ende ihrer geraden Kante. Mit `auf <Traeger>:<Punkt>` wandert der Bezugspunkt auf diesen Traegerpunkt:
+#   bei Donut und Scheiben ist das die Stelle aus dem Mustertext (VPB, VH, VA, KF1), bei den halben
+#   Scheiben KUL0/KUR0, das Vorderende der Kragennaht (N13). Die halbe Scheibe liegt mit ihrer geraden
+#   Kante buendig auf der Kragenvorderkante KUL0-KOL, mit dem Bauch nach innen; die Drehung 110,4 Grad ist
+#   der Winkel dieser Kante im Muster (links gespiegelt, weil der Bauch sonst nach aussen zeigt).
+#   `abstand` ist 1 mm kleiner als beim Traeger (innen aufgeklebt, naeher an der Haut) bzw. 1 mm groesser
+#   (Aussenkragen liegt aussen auf dem Innenkragen), damit die beiden Netze nicht in einer Flaeche liegen.
+#   Der Donut deckt die Trim-Enden und liegt deshalb noch 1 mm unter dem Trim.
 
 abstand 2
 
@@ -35,3 +48,19 @@ Aermel Kurz Links        | arm links  | B1_AM0  | oben | 0 | gespiegelt abstand 
 Aermel Kurz Rechts       | arm rechts | B1_AM0R | oben | 0 | gespiegelt abstand 0,5
 
 Stehkragen Innen         | hals | KHM | hinten | hals seitlich -2,2 | abstand 3
+
+# Aufgeklebt (siehe Kopf): Trim innen an der Oeffnung, Aussenkragen aussen auf dem Innenkragen,
+# Donut ueber den Trim-Enden innen auf der Bruecke, Scheiben innen auf Saumnaht, Achsel und
+# Frog-Enden, halbe Scheiben innen am Kragenende. Die Reihenfolge hier spielt keine Rolle.
+Trim Oeffnung Links      | - | VK0_L | - | - | auf Oberteil vorn Links abstand 1,9 klebt Oberteil vorn Links
+Trim Oeffnung Rechts     | - | VK0_R | - | - | auf Oberteil vorn Rechts abstand 1,9 klebt Oberteil vorn Rechts
+Stehkragen Aussen gestuft | - | KOL | - | - | auf Stehkragen Innen abstand 3,1 klebt Stehkragen Innen
+Donut Bruecke            | - | - | - | - | auf Band Mitte:VPB abstand 1,8 klebt Band Mitte
+Scheibe Saum Links       | - | - | - | - | auf Band seitlich Links:VH_L abstand 0,4 klebt Band seitlich Links
+Scheibe Saum Rechts      | - | - | - | - | auf Band seitlich Rechts:VH_R abstand 0,4 klebt Band seitlich Rechts
+Scheibe Achsel Links     | - | - | - | - | auf Oberteil seitlich Links:VA_L abstand 0,4 klebt Oberteil seitlich Links
+Scheibe Achsel Rechts    | - | - | - | - | auf Oberteil seitlich Rechts:VA_R abstand 0,4 klebt Oberteil seitlich Rechts
+Scheibe Frog Schlaufe    | - | - | - | - | auf Stehkragen Innen:KF1L abstand 2,9 klebt Stehkragen Innen
+Scheibe Frog Knebel      | - | - | - | - | auf Stehkragen Innen:KF1R abstand 2,9 klebt Stehkragen Innen
+Halbe Scheibe Kragenende Links  | - | HH2 | - | - | auf Stehkragen Innen:KUL0 abstand 2,9 gespiegelt drehung 110,4 klebt Stehkragen Innen
+Halbe Scheibe Kragenende Rechts | - | HH2 | - | - | auf Stehkragen Innen:KUR0 abstand 2,9 drehung 110,4 klebt Stehkragen Innen

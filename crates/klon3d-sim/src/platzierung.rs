@@ -23,7 +23,12 @@
 //!   eines anderen Teils sein: Teile aus demselben Konstruktionsblock mit
 //!   demselben Bezugspunkt liegen zueinander wie im Muster, gemeinsame
 //!   Nahtpunkte also schon aufeinander. `klebt <Teil>` bindet dieses Teil an
-//!   das genannte statt es zu nähen ([`crate::klebung`]).
+//!   das genannte statt es zu nähen ([`crate::klebung`]). `auf <Träger>` bzw.
+//!   `auf <Träger>:<Punkt>` legt einen Flicken ohne eigene Bogenlage auf ein
+//!   anderes Teil: Zone, Umfangslage, Höhe, Prisma, Drehung und Abstand kommen
+//!   von dort, nur der eigene Musterpunkt bleibt. Damit lassen sich Auflagen und
+//!   Scheiben platzieren, die im Schnitt weit neben dem Kleidungsstück liegen
+//!   (Aufgabe #102: 12 aufgeklebte Teile der Bluse3 v2).
 //! * **Abwicklung:** Jedes Teil wird längentreu auf seinen Hüllkörper gelegt —
 //!   Prisma und Zylinder sind abwickelbar. Musterrichtung y (nach unten) wird
 //!   die Höhe bzw. die Armachse, Musterrichtung x der Umfang.
@@ -448,6 +453,23 @@ pub struct Lageangabe {
     /// Auf dieses Teil kleben statt nähen ([`crate::klebung`]): der Name des
     /// Teils darunter. `None` = nicht geklebt.
     pub klebt_auf: Option<String>,
+    /// `auf <Träger>` oder `auf <Träger>:<Punkt>`: dieser Flicken hat keinen
+    /// eigenen Rahmen im Muster, sondern übernimmt Zone, Umfangslage, Höhe,
+    /// Drehung, Spiegelung und Abstand von seinem Träger.
+    ///
+    /// Für Auflagen und Scheiben, die im Muster weit neben dem Kleidungsstück
+    /// gezeichnet sind: ihre Lage auf dem Körper ergibt sich daraus, wo sie
+    /// kleben, nicht aus einer eigenen Bogenlänge. Die Felder Zone, Umfang und
+    /// Höhe bleiben dann `-`, weil sie aus dem Träger kommen.
+    ///
+    /// * ohne Punktnamen: der Anker (Feld 3) ist der gleichnamige Punkt des
+    ///   Trägers, der Flicken liegt so auf ihm, wie beide im Muster liegen -
+    ///   für Teile, die mit gemeinsamen Knoten konstruiert sind (Trim an der
+    ///   Öffnung, Außenkragen auf dem Innenkragen).
+    /// * mit Punktnamen: der eigene Anker wandert auf genau diesen Trägerpunkt,
+    ///   die Ausrichtung bleibt die des Trägers - für Scheiben und Donut, die
+    ///   als Vorrat neben dem Schnitt liegen.
+    pub auf: Option<(String, Option<String>)>,
 }
 
 /// Die Lagedatei: Abstand der Hüllkörper und je Teil eine Angabe.
@@ -479,6 +501,21 @@ fn mit_zusatz<T: Copy>(s: &str, namen: &[(&str, T)], null: T) -> Result<(T, f64)
     Ok((null, zahl(&s)?))
 }
 
+/// Byte-Position des Wortes `wort` in `s`, von Leerzeichen begrenzt. Damit
+/// lassen sich Optionen in der letzten Spalte finden, ohne Teilnamen (die
+/// Leerzeichen enthalten: `Band Mitte`) an Leerzeichen zu zerlegen.
+fn wortposition(s: &str, wort: &str) -> Option<usize> {
+    let mut von = 0;
+    while let Some(i) = s[von..].find(wort).map(|i| von + i) {
+        let grenze = |c: Option<char>| c.map_or(true, char::is_whitespace);
+        if grenze(s[..i].chars().next_back()) && grenze(s[i + wort.len()..].chars().next()) {
+            return Some(i);
+        }
+        von = i + wort.len();
+    }
+    None
+}
+
 /// Liest eine Lagedatei:
 ///
 /// ```text
@@ -495,8 +532,12 @@ fn mit_zusatz<T: Copy>(s: &str, namen: &[(&str, T)], null: T) -> Result<(T, f64)
 /// ab dem Schulterpunkt längs der Achse zur Hand. Optionen: `gespiegelt`,
 /// `drehung N` (Grad), `abstand N` (cm, nur für dieses Teil), `dicke N` (mm,
 /// Folie bzw. Laminat dieses Teils), `klebt <Teil>` (dieses Teil wird auf das
-/// genannte geklebt statt genäht, siehe [`crate::klebung`]). Ein Zusatz mit `cm` (`vorn +19,3cm`) ist Bogenlänge
-/// statt Grad.
+/// genannte geklebt statt genäht, siehe [`crate::klebung`]), `auf <Träger>`
+/// oder `auf <Träger>:<Punkt>` (ein Flicken ohne eigenen Rahmen im Muster:
+/// Zone, Umfang, Höhe, Prisma, Drehung und Abstand kommen aus dem Träger, die
+/// drei Felder davor bleiben dann `-`; `gespiegelt`, `drehung` und `abstand`
+/// gelten als eigener Zusatz um den Anker). Ein Zusatz mit `cm`
+/// (`vorn +19,3cm`) ist Bogenlänge statt Grad.
 pub fn lies_lage(text: &str) -> Result<Lageliste, String> {
     let mut liste = Lageliste { abstand: ABSTAND, angaben: Vec::new() };
     for (nr, zeile) in text.lines().enumerate() {
@@ -513,36 +554,101 @@ pub fn lies_lage(text: &str) -> Result<Lageliste, String> {
         if !(5..=6).contains(&f.len()) {
             return Err(fehler(format!("erwartet 5 oder 6 Felder, gefunden {}", f.len())));
         }
-        let zone = match f[1].to_lowercase().as_str() {
-            "rumpf" => Zone::Rumpf,
-            "hals" => Zone::Hals,
-            "arm links" => Zone::Arm(0),
-            "arm rechts" => Zone::Arm(1),
-            andere => return Err(fehler(format!("unbekannte Zone {andere:?}"))),
+        // `auf <Traeger>` oder `auf <Traeger>:<Punkt>` ersetzt Zone, Umfang und
+        // Hoehe: sie kommen aus dem Traeger. Vorher gelesen, weil die drei
+        // Felder dann `-` sind. Teilnamen enthalten Leerzeichen ("Band Mitte"),
+        // deshalb endet der Name nicht am ersten Leerzeichen, sondern dort, wo
+        // eine bekannte Option der letzten Spalte beginnt.
+        const OPTIONEN: [&str; 5] = ["gespiegelt", "drehung", "abstand", "dicke", "auf"];
+        let mut auf: Option<(String, Option<String>)> = None;
+        let mut klebt_auf: Option<String> = None;
+        let mut rest = if let Some(opt) = f.get(5) { opt.trim().to_string() } else { String::new() };
+        if let Some(opt) = f.get(5) {
+            let mut opt = opt.trim();
+            // `klebt` steht hinter `auf` und reicht bis zum Spaltenende.
+            if let Some(i) = wortposition(opt, "klebt") {
+                let name = opt[i + "klebt".len()..].trim().to_string();
+                if name.is_empty() || name.starts_with(|c: char| c.is_ascii_digit()) {
+                    return Err(fehler("erwartet 'klebt <Teilname>'".into()));
+                }
+                klebt_auf = Some(name);
+                opt = opt[..i].trim_end();
+            }
+            rest = opt.to_string();
+            if let Some(i) = wortposition(opt, "auf") {
+                let nach = opt[i + "auf".len()..].trim_start();
+                let ende = OPTIONEN
+                    .iter()
+                    .filter_map(|w| wortposition(nach, w))
+                    .min()
+                    .unwrap_or(nach.len());
+                let arg = nach[..ende].trim();
+                rest = nach[ende..].trim().to_string();
+                let (traeger, punkt) = match arg.rsplit_once(':') {
+                    Some((t, p)) if !t.trim().is_empty() && !p.trim().is_empty() => {
+                        (t.trim(), Some(p.trim().to_string()))
+                    }
+                    Some(_) => {
+                        return Err(fehler(format!(
+                            "erwartet 'auf <Traeger>' oder 'auf <Traeger>:<Punkt>', gefunden {arg:?}"
+                        )))
+                    }
+                    None if !arg.is_empty() => (arg, None),
+                    None => return Err(fehler(format!("erwartet 'auf <Traeger>', gefunden {arg:?}"))),
+                };
+                auf = Some((traeger.to_string(), punkt));
+            }
+        }
+        if auf.is_some() {
+            // Eine zweite, widersprechende Zahl waere schlimmer als ein Fehler.
+            for (feld, inhalt) in [("Zone", f[1]), ("Umfang", f[3]), ("Hoehe", f[4])] {
+                if inhalt != "-" {
+                    return Err(fehler(format!("mit 'auf' bleibt {feld} '-', gefunden {inhalt:?}")));
+                }
+            }
+        }
+        let (zone, umfang_grad, umfang_bogen, hoehe) = if auf.is_some() {
+            // Platzhalter; `platziere_mit` setzt sie aus dem Traeger.
+            (Zone::Rumpf, 0.0, 0.0, (Hoehenbezug::Null, 0.0))
+        } else {
+            let zone = match f[1].to_lowercase().as_str() {
+                "rumpf" => Zone::Rumpf,
+                "hals" => Zone::Hals,
+                "arm links" => Zone::Arm(0),
+                "arm rechts" => Zone::Arm(1),
+                andere => return Err(fehler(format!("unbekannte Zone {andere:?}"))),
+            };
+            let umfang_namen: &[(&str, f64)] = if matches!(zone, Zone::Arm(_)) {
+                &[("oben", 0.0), ("vorn", 90.0), ("unten", 180.0), ("hinten", 270.0)]
+            } else {
+                &[("vorn", 0.0), ("links", 90.0), ("hinten", 180.0), ("rechts", 270.0)]
+            };
+            let (umfang, bogen_cm) = match f[3].trim().strip_suffix("cm") {
+                Some(rest) => (rest, true),
+                None => (f[3], false),
+            };
+            let (basis, plus) = mit_zusatz(umfang, umfang_namen, 0.0).map_err(fehler)?;
+            let (plus_grad, umfang_bogen) = if bogen_cm { (0.0, plus / 100.0) } else { (plus, 0.0) };
+            let hoehe_namen = [
+                ("hals vorn", Hoehenbezug::HalsVorn),
+                ("hals hinten", Hoehenbezug::HalsHinten),
+                ("hals seitlich", Hoehenbezug::HalsSeitlich),
+                ("schulter", Hoehenbezug::Schulter),
+            ];
+            let (bezug, cm) = mit_zusatz(f[4], &hoehe_namen, Hoehenbezug::Null).map_err(fehler)?;
+            (zone, basis + plus_grad, umfang_bogen, (bezug, cm / 100.0))
         };
         let punkt = (f[2] != "-").then(|| f[2].to_string());
-        let umfang_namen: &[(&str, f64)] = if matches!(zone, Zone::Arm(_)) {
-            &[("oben", 0.0), ("vorn", 90.0), ("unten", 180.0), ("hinten", 270.0)]
-        } else {
-            &[("vorn", 0.0), ("links", 90.0), ("hinten", 180.0), ("rechts", 270.0)]
-        };
-        let (umfang, bogen_cm) = match f[3].trim().strip_suffix("cm") {
-            Some(rest) => (rest, true),
-            None => (f[3], false),
-        };
-        let (basis, plus) = mit_zusatz(umfang, umfang_namen, 0.0).map_err(fehler)?;
-        let (plus_grad, umfang_bogen) = if bogen_cm { (0.0, plus / 100.0) } else { (plus, 0.0) };
-        let hoehe_namen = [
-            ("hals vorn", Hoehenbezug::HalsVorn),
-            ("hals hinten", Hoehenbezug::HalsHinten),
-            ("hals seitlich", Hoehenbezug::HalsSeitlich),
-            ("schulter", Hoehenbezug::Schulter),
-        ];
-        let (bezug, cm) = mit_zusatz(f[4], &hoehe_namen, Hoehenbezug::Null).map_err(fehler)?;
+        if let Some((_, None)) = &auf {
+            // Ohne Punktnamen liegt der Flicken auf dem gleichnamigen Punkt des
+            // Traegers; dann braucht er in Feld 3 seinen eigenen Punkt.
+            if punkt.is_none() {
+                return Err(fehler("mit 'auf <Traeger>' braucht das Teil seinen eigenen Punkt in Feld 3".into()));
+            }
+        }
         let (mut gespiegelt, mut drehung_grad, mut abstand, mut dicke) = (false, 0.0, None, None);
-        let mut klebt_auf = None;
-        if let Some(opt) = f.get(5) {
-            let w: Vec<&str> = opt.split_whitespace().collect();
+        {
+            let w: Vec<&str> = rest.split_whitespace().collect();
             let mut i = 0;
             while i < w.len() {
                 match w[i] {
@@ -559,14 +665,8 @@ pub fn lies_lage(text: &str) -> Result<Lageliste, String> {
                         dicke = Some(zahl(w.get(i + 1).copied().unwrap_or("")).map_err(fehler)? / 1000.0);
                         i += 1;
                     }
-                    "klebt" => {
-                        let name = w.get(i + 1).copied().unwrap_or("");
-                        if name.is_empty() || name.starts_with(|c: char| c.is_ascii_digit()) {
-                            return Err(fehler("erwartet 'klebt <Teilname>'".into()));
-                        }
-                        klebt_auf = Some(name.to_string());
-                        i += 1;
-                    }
+                    "auf" => return Err(fehler("'auf' steht zweimal".into())),
+                    "klebt" => return Err(fehler("'klebt' steht zweimal".into())),
                     andere => return Err(fehler(format!("unbekannte Option {andere:?}"))),
                 }
                 i += 1;
@@ -576,14 +676,15 @@ pub fn lies_lage(text: &str) -> Result<Lageliste, String> {
             teil: f[0].to_string(),
             zone,
             punkt,
-            umfang_grad: basis + plus_grad,
+            umfang_grad,
             umfang_bogen,
-            hoehe: (bezug, cm / 100.0),
+            hoehe,
             gespiegelt,
             drehung_grad,
             abstand,
             dicke,
             klebt_auf,
+            auf,
         });
     }
     Ok(liste)
@@ -614,6 +715,10 @@ struct Abwicklung {
     /// Neck: the neck seam (angle, radius, height) — height of the piece point
     /// on it.
     hals_naht: [(f64, f64, f64); 4],
+    /// Extra height (m) for a patch on the neck: the neck zone derives a point's
+    /// height from the seam alone, so a patch glued above or below the seam
+    /// carries the carrier's height here instead of in the pattern anchor.
+    z_zusatz: f64,
     /// Arm: das Armprisma mit Abstand; `um` ist die Bogenlänge des Ankers.
     armumriss: Vec<[f64; 2]>,
     /// Abstand dieses Teils zur Haut (m) - der Suchradius der Klebezone.
@@ -758,7 +863,11 @@ impl Platzierung {
                 // would pull the collar below the seam again.
                 let grad = w.to_degrees() + 90.0;
                 let (z_naht, _) = hals_naht_bei(&a.hals_naht, grad);
-                [self.hals_mitte[0] + a.radius * w.cos(), self.hals_mitte[1] + a.radius * w.sin(), z_naht + e[1]]
+                [
+                    self.hals_mitte[0] + a.radius * w.cos(),
+                    self.hals_mitte[1] + a.radius * w.sin(),
+                    z_naht + e[1] + a.z_zusatz,
+                ]
             }
             Zone::Arm(s) => {
                 let z = &self.arme[s];
@@ -773,6 +882,34 @@ impl Platzierung {
     }
 }
 
+/// Höhe eines Teils im Raum (m) aus der Höhenspalte seiner Lageangabe.
+fn hoehe_im_raum(a: &Lageangabe, h: &Hoehen) -> f64 {
+    let basis = match a.hoehe.0 {
+        Hoehenbezug::Null => 0.0,
+        Hoehenbezug::HalsVorn => h.hals_vorn,
+        Hoehenbezug::HalsHinten => h.hals_hinten,
+        Hoehenbezug::HalsSeitlich => h.hals_seitlich,
+        Hoehenbezug::Schulter => h.schulter,
+    };
+    basis + a.hoehe.1
+}
+
+/// Der Träger eines Flickens (`auf <Träger>:<Punkt>`): der Index des Teils in
+/// `teile`. Ein fehlender oder mehrdeutiger Träger ist ein Fehler und kein
+/// stilles Nichtkleben; die Reihenfolge in der Lagedatei spielt keine Rolle,
+/// weil [`platziere_mit`] die Flicken in Abhängigkeitsreihenfolge auflöst.
+fn carrier_of(teile: &[klon3d_mesh::Teilnetz], name: &str, ti: usize, eigen: &str) -> Result<usize, String> {
+    let treffer: Vec<usize> = (0..teile.len())
+        .filter(|&i| teile[i].teil == name || teile[i].teil.rsplit(" - ").next() == Some(name))
+        .collect();
+    match treffer[..] {
+        [u] if u == ti => Err(format!("{eigen}: Traeger ist das Teil selbst")),
+        [u] => Ok(u),
+        [] => Err(format!("{eigen}: Traeger {name:?} steht nicht in dieser Lagedatei")),
+        _ => Err(format!("{eigen}: Traegername {name:?} ist mehrdeutig")),
+    }
+}
+
 /// Mitte des Hüllrechtecks eines Teils (mm).
 fn teilmitte(punkte: &[[f64; 2]]) -> [f64; 2] {
     let (mut lo, mut hi) = ([f64::INFINITY; 2], [f64::NEG_INFINITY; 2]);
@@ -783,6 +920,32 @@ fn teilmitte(punkte: &[[f64; 2]]) -> [f64; 2] {
         }
     }
     [0.5 * (lo[0] + hi[0]), 0.5 * (lo[1] + hi[1])]
+}
+
+/// Rumpfprisma im Abstand `ab` (m), notfalls neu gebaut. Ein Flicken mit
+/// eigenem Abstand (`abstand` neben `auf`) braucht eines, das es unter den
+/// Teilen der Lagedatei nicht gibt: die Hülle wird aus den Rumpfteilen
+/// gebaut, und Flicken zählen dort nicht mit.
+fn prisma_im_abstand(
+    prismen: &mut Vec<(f64, Vec<[f64; 2]>)>,
+    ab: f64,
+    z: (f64, f64),
+    huellen: &Huellen,
+) -> Result<usize, String> {
+    if let Some(i) = prismen.iter().position(|(x, _)| *x == ab) {
+        return Ok(i);
+    }
+    let u = huellen.rumpfumriss(z.0, z.1, ab);
+    if u.len() < 3 {
+        return Err(format!(
+            "keine Rumpfpunkte zwischen {:.2} und {:.2} m für den Abstand {:.1} cm",
+            z.0,
+            z.1,
+            ab * 100.0
+        ));
+    }
+    prismen.push((ab, u));
+    Ok(prismen.len() - 1)
 }
 
 /// Legt die Teile mit Lageangabe um den Körper. Bezugspunkte sucht sie unter
@@ -851,35 +1014,35 @@ pub fn platziere_mit(netz: &Musternetz, liste: &Lageliste, huellen: &Huellen, we
         }
     }
 
-    // Anker und Höhen; daraus der Höhenbereich der Rumpfteile.
+    // Anker (der eigene Musterpunkt), Reichweite und Höhenbereich. Ein
+    // Flicken (`auf`) spannt keinen eigenen Höhenbereich auf: er liegt auf
+    // seinem Träger und übernimmt dessen Rahmen.
     let h = &huellen.hoehen;
-    let mut anker = Vec::new();
+    let mut anker = Vec::with_capacity(angaben.len());
+    let mut reich = Vec::with_capacity(angaben.len());
     let (mut z_unten, mut z_oben) = (f64::INFINITY, f64::NEG_INFINITY);
     for (t, a) in teile.iter().zip(&angaben) {
         let q = match &a.punkt {
             Some(n) => punkt(t, n).ok_or_else(|| format!("{}: Punktknoten {n:?} in keinem Teil", t.teil))?,
             None => teilmitte(&t.punkte),
         };
-        let basis = match a.hoehe.0 {
-            Hoehenbezug::Null => 0.0,
-            Hoehenbezug::HalsVorn => h.hals_vorn,
-            Hoehenbezug::HalsHinten => h.hals_hinten,
-            Hoehenbezug::HalsSeitlich => h.hals_seitlich,
-            Hoehenbezug::Schulter => h.schulter,
-        };
-        let hoch = basis + a.hoehe.1;
         // Reichweite um den Anker (m), auch gedreht: Höhenbereich des Prismas.
-        let reich = t.punkte.iter().map(|p| ((p[0] - q[0]).powi(2) + (p[1] - q[1]).powi(2)).sqrt() * 1e-3).fold(0.0, f64::max);
-        if a.zone == Zone::Rumpf {
-            z_unten = z_unten.min(hoch - reich);
-            z_oben = z_oben.max(hoch + reich);
+        let r = t.punkte.iter().map(|p| ((p[0] - q[0]).powi(2) + (p[1] - q[1]).powi(2)).sqrt() * 1e-3).fold(0.0, f64::max);
+        if a.auf.is_none() {
+            let hoch = hoehe_im_raum(a, h);
+            if a.zone == Zone::Rumpf {
+                z_unten = z_unten.min(hoch - r);
+                z_oben = z_oben.max(hoch + r);
+            }
         }
-        anker.push((q, hoch, reich));
+        anker.push(q);
+        reich.push(r);
     }
     let abstand = |a: &Lageangabe| a.abstand.unwrap_or(liste.abstand);
-    // Ein Prisma je vorkommendem Abstand der Rumpfteile.
+    // Ein Prisma je vorkommendem Abstand der Rumpfteile; Flicken zählen nicht,
+    // sie liegen auf einem Träger und weiten den Rumpf nicht.
     let mut prismen: Vec<(f64, Vec<[f64; 2]>)> = Vec::new();
-    for a in angaben.iter().filter(|a| a.zone == Zone::Rumpf) {
+    for a in angaben.iter().filter(|a| a.zone == Zone::Rumpf && a.auf.is_none()) {
         let ab = abstand(a);
         if !prismen.iter().any(|(x, _)| *x == ab) {
             let u = huellen.rumpfumriss(z_unten, z_oben.min(h.schulter), ab);
@@ -898,51 +1061,191 @@ pub fn platziere_mit(netz: &Musternetz, liste: &Lageliste, huellen: &Huellen, we
         [u.iter().map(|p| p[0]).sum::<f64>() / n, u.iter().map(|p| p[1]).sum::<f64>() / n]
     };
 
-    let mut abwicklung = Vec::new();
-    let mut klebt: Vec<(usize, usize)> = Vec::new();
-    for (ti, (a, &(q, hoch, reich))) in angaben.iter().zip(&anker).enumerate() {
-        let ab = abstand(a);
-        let prisma = prismen.iter().position(|(x, _)| *x == ab).unwrap_or(0);
-        let radius = if a.zone == Zone::Hals { huellen.hals_radius + ab } else { 0.0 };
-        // Am Arm: das Prisma über die Länge des Teils.
-        let armumriss = match a.zone {
-            Zone::Arm(s) => {
-                let u = huellen.arme[s].umriss((hoch - reich).max(0.0), hoch + reich, ab);
-                if u.len() < 3 {
-                    return Err(format!("{}: keine Armpunkte zwischen {:.2} und {:.2} m längs der Achse", a.teil, hoch - reich, hoch + reich));
+    // Every piece gets its frame from the body, or - for a glued-on patch
+    // (`auf <Träger>:<Punkt>`) - from the piece underneath it. Patches may be
+    // chained (a disc on a collar that itself lies on the neck), so they are
+    // resolved in dependency order rather than file order.
+    let mut abwicklung: Vec<Option<Abwicklung>> = vec![None; angaben.len()];
+    let mut offen: Vec<usize> = (0..angaben.len()).collect();
+    while !offen.is_empty() {
+        let mut fortschritt = false;
+        let mut naechste = Vec::new();
+        for &ti in &offen {
+            let a = &angaben[ti];
+            let ab = abstand(a);
+            let rahmen = match &a.auf {
+                // A glued-on patch has no frame of its own in the pattern: it
+                // lies on its carrier, so it takes the carrier's zone, prism,
+                // neck or arm hull and offset from the body. Only its own
+                // pattern points stay, and its base is shifted by the carrier
+                // point's share so the reference point lands where the carrier
+                // put it. Its own `gespiegelt`, `drehung` and `abstand` are an
+                // additional rotation, mirror and offset about its anchor.
+                Some((traeger, punktname)) => {
+                    let ut = carrier_of(&teile, traeger, ti, &a.teil)?;
+                    let Some(u) = &abwicklung[ut] else {
+                        // Carrier not resolved yet - next pass.
+                        naechste.push(ti);
+                        continue;
+                    };
+                    let wt = &teile[ut];
+                    // Without a point name the patch sits on its own named
+                    // point of the carrier (pieces built with shared nodes);
+                    // with one, its anchor moves onto exactly that point.
+                    let name = punktname
+                        .as_deref()
+                        .or(a.punkt.as_deref())
+                        .ok_or_else(|| format!("{}: 'auf' braucht einen Punkt in Feld 3", a.teil))?;
+                    let p = punkt(wt, name).ok_or_else(|| {
+                        format!("{}: Punktknoten {name:?} des Traegers {:?} nicht gefunden", a.teil, wt.teil)
+                    })?;
+                    // Where the carrier puts that point, as a local offset.
+                    let e = [(p[0] - u.anker[0]) * 1e-3, -(p[1] - u.anker[1]) * 1e-3];
+                    let (s, c) = u.drehung.sin_cos();
+                    let e = [u.spiegel * (e[0] * c - e[1] * s), e[0] * s + e[1] * c];
+                    let (mut um, mut hoch, mut z_zusatz) = (u.um, u.hoch, 0.0);
+                    match u.zone {
+                        Zone::Rumpf => {
+                            um += e[0];
+                            hoch += e[1];
+                        }
+                        Zone::Hals => {
+                            // The neck zone puts every point vertically above
+                            // its own seam point, so the offset along the neck
+                            // is an angle and the height becomes a plain add-on.
+                            um += e[0] / u.radius;
+                            z_zusatz = e[1];
+                        }
+                        Zone::Arm(si) => {
+                            // Along the arm the pattern x is mirrored per side
+                            // and the axis runs head to hand.
+                            let z = &huellen.arme[si];
+                            let sigma = dot(cross(z.oben, z.achse), z.vorn).signum();
+                            um += sigma * e[0];
+                            hoch -= e[1];
+                        }
+                    }
+                    // A patch with an offset of its own (two collar layers, a
+                    // disc lifted off its carrier) may need a torso prism that
+                    // no sewn piece asked for. Build it instead of pointing at
+                    // whatever sits at index 0.
+                    let ab_p = a.abstand.unwrap_or(u.abstand);
+                    let prisma = if u.zone == Zone::Rumpf && ab_p != u.abstand {
+                        prisma_im_abstand(&mut prismen, ab_p, (z_unten, z_oben.min(h.schulter)), huellen)?
+                    } else {
+                        u.prisma
+                    };
+                    // The same holds for the neck and the arm: a layer at
+                    // another offset sits on another radius or another hull.
+                    let radius = if u.zone == Zone::Hals { huellen.hals_radius + ab_p } else { u.radius };
+                    let armumriss = match u.zone {
+                        Zone::Arm(si) if ab_p != u.abstand => {
+                            let z = &huellen.arme[si];
+                            let u2 = z.umriss((hoch - reich[ti]).max(0.0), hoch + reich[ti], ab_p);
+                            if u2.len() < 3 {
+                                return Err(format!(
+                                    "{}: keine Armpunkte zwischen {:.2} und {:.2} m längs der Achse",
+                                    a.teil,
+                                    hoch - reich[ti],
+                                    hoch + reich[ti]
+                                ));
+                            }
+                            u2
+                        }
+                        _ => u.armumriss.clone(),
+                    };
+                    Abwicklung {
+                        zone: u.zone,
+                        anker: anker[ti],
+                        drehung: u.drehung + a.drehung_grad.to_radians(),
+                        spiegel: if a.gespiegelt { -u.spiegel } else { u.spiegel },
+                        um,
+                        um_mitte: u.um_mitte,
+                        hoch,
+                        prisma,
+                        radius,
+                        hals_naht: huellen.hals_naht,
+                        z_zusatz,
+                        armumriss,
+                        dicke: a.dicke,
+                        abstand: ab_p,
+                    }
                 }
-                u
-            }
-            _ => Vec::new(),
-        };
-        let um_mitte = if a.zone == Zone::Rumpf { bogen_in_richtung(&prismen[prisma].1, mitte, richtung(a.umfang_grad)) } else { 0.0 };
-        let um = match a.zone {
-            Zone::Rumpf => um_mitte + a.umfang_bogen,
-            // Winkel in der Ebene: 0 = vorn (−y) entspricht −90° mathematisch.
-            Zone::Hals => (a.umfang_grad - 90.0).to_radians() + a.umfang_bogen / radius,
-            Zone::Arm(_) => {
-                let w = a.umfang_grad.to_radians();
-                bogen_in_richtung(&armumriss, [0.0, 0.0], [w.cos(), w.sin()]) + a.umfang_bogen
-            }
-        };
-        abwicklung.push(Abwicklung {
-                zone: a.zone,
-                anker: q,
-                drehung: a.drehung_grad.to_radians(),
-                spiegel: if a.gespiegelt { -1.0 } else { 1.0 },
-            um,
-            um_mitte,
-            hoch,
-            prisma,
-            radius,
-            hals_naht: huellen.hals_naht,
-            armumriss,
-            dicke: a.dicke,
-            abstand: ab,
-        });
+                None => {
+                    let hoch = hoehe_im_raum(a, h);
+                    // Am Arm: das Prisma über die Länge des Teils.
+                    let armumriss = match a.zone {
+                        Zone::Arm(s) => {
+                            let u = huellen.arme[s].umriss((hoch - reich[ti]).max(0.0), hoch + reich[ti], ab);
+                            if u.len() < 3 {
+                                return Err(format!(
+                                    "{}: keine Armpunkte zwischen {:.2} und {:.2} m längs der Achse",
+                                    a.teil,
+                                    hoch - reich[ti],
+                                    hoch + reich[ti]
+                                ));
+                            }
+                            u
+                        }
+                        _ => Vec::new(),
+                    };
+                    let prisma = prismen.iter().position(|(x, _)| *x == ab).unwrap_or(0);
+                    let um_mitte = if a.zone == Zone::Rumpf {
+                        bogen_in_richtung(&prismen[prisma].1, mitte, richtung(a.umfang_grad))
+                    } else {
+                        0.0
+                    };
+                    let radius = if a.zone == Zone::Hals { huellen.hals_radius + ab } else { 0.0 };
+                    let um = match a.zone {
+                        Zone::Rumpf => um_mitte + a.umfang_bogen,
+                        // Winkel in der Ebene: 0 = vorn (−y) entspricht −90° Grad.
+                        Zone::Hals => (a.umfang_grad - 90.0).to_radians() + a.umfang_bogen / radius,
+                        Zone::Arm(_) => {
+                            let w = a.umfang_grad.to_radians();
+                            bogen_in_richtung(&armumriss, [0.0, 0.0], [w.cos(), w.sin()]) + a.umfang_bogen
+                        }
+                    };
+                    Abwicklung {
+                        zone: a.zone,
+                        anker: anker[ti],
+                        drehung: a.drehung_grad.to_radians(),
+                        spiegel: if a.gespiegelt { -1.0 } else { 1.0 },
+                        um,
+                        um_mitte,
+                        hoch,
+                        prisma,
+                        radius,
+                        hals_naht: huellen.hals_naht,
+                        z_zusatz: 0.0,
+                        armumriss,
+                        dicke: a.dicke,
+                        abstand: ab,
+                    }
+                }
+            };
+            abwicklung[ti] = Some(rahmen);
+            fortschritt = true;
+        }
+        if !fortschritt {
+            // Everything left depends on something that never resolves: a
+            // ring, or a carrier that itself waits. Name it instead of looping.
+            let ti = naechste[0];
+            let a = &angaben[ti];
+            let (traeger, _) = a.auf.clone().expect("nur 'auf'-Teile bleiben offen");
+            return Err(format!(
+                "{}: Traeger {traeger:?} loest sich nicht auf (Kreis oder Kette ueber sich selbst)",
+                a.teil
+            ));
+        }
+        offen = naechste;
+    }
+    let abwicklung: Vec<Abwicklung> = abwicklung.into_iter().map(|a| a.expect("alle aufgeloest")).collect();
+
+    // Glue requests: (piece, piece below). Names like in the seam list, so
+    // also the name behind the last " - ".
+    let mut klebt: Vec<(usize, usize)> = Vec::new();
+    for (ti, a) in angaben.iter().enumerate() {
         if let Some(ziel) = &a.klebt_auf {
-            // Der Name muss ein platziertes Teil sein; Teilnamen wie in der
-            // Nahtliste, also auch der Name hinter dem letzten " - ".
             let treffer: Vec<usize> = (0..teile.len())
                 .filter(|&i| teile[i].teil == *ziel || teile[i].teil.rsplit(" - ").next() == Some(ziel.as_str()))
                 .collect();
@@ -968,7 +1271,7 @@ pub fn platziere_mit(netz: &Musternetz, liste: &Lageliste, huellen: &Huellen, we
         let haupt = prismen.iter().position(|(x, _)| *x == liste.abstand).unwrap_or(0);
         let p_umfang = umfang(&prismen[haupt].1);
         let mut breite = vec![0.0; fach];
-        for (ti, a) in abwicklung.iter().enumerate().filter(|(_, a)| a.zone == Zone::Rumpf) {
+        for (ti, a) in abwicklung.iter().enumerate().filter(|(ti, a)| a.zone == Zone::Rumpf && angaben[*ti].auf.is_none()) {
             let mut je: Vec<(f64, f64)> = vec![(f64::INFINITY, f64::NEG_INFINITY); fach];
             for q in &teile[ti].punkte {
                 let e = [(q[0] - a.anker[0]) * 1e-3, -(q[1] - a.anker[1]) * 1e-3];
@@ -1066,6 +1369,39 @@ mod tests {
         assert!(lies_lage("Verst | rumpf | - | vorn | 0 | klebt 3").is_err());
         assert!(lies_lage("X | bein | - | 0 | 0").is_err());
         assert!(lies_lage("X | rumpf | - | vorn | 0 | quer").is_err());
+        // `auf <Träger>` oder `auf <Träger>:<Punkt>` holt Zone, Umfang und Höhe
+        // aus dem Träger; die drei Felder müssen dann `-` sein.
+        let t = lies_lage("Flicken | - | HD0 | - | - | auf Band Mitte:VPB klebt Band Mitte\n").unwrap();
+        assert_eq!(
+            t.angaben[0].auf.as_ref().map(|(a, b)| (a.as_str(), b.as_deref())),
+            Some(("Band Mitte", Some("VPB")))
+        );
+        assert_eq!(t.angaben[0].punkt.as_deref(), Some("HD0"));
+        assert_eq!(t.angaben[0].klebt_auf.as_deref(), Some("Band Mitte"));
+        // Ohne Punktnamen liegt der Flicken auf dem gleichnamigen Punkt des
+        // Trägers; der Punktname darf auch aus Feld 3 kommen.
+        let o = lies_lage("Kragen | - | KHM | - | - | auf Stehkragen Innen\n").unwrap();
+        assert_eq!(o.angaben[0].auf.as_ref().map(|(a, b)| (a.as_str(), b.is_none())), Some(("Stehkragen Innen", true)));
+        assert_eq!(o.angaben[0].punkt.as_deref(), Some("KHM"));
+        // Eine eigene Drehung, Spiegelung und ein eigener Abstand sind ein
+        // Zusatz um den Anker, kein Widerspruch zum Träger.
+        let z = lies_lage("Scheibe | - | HS1 | - | - | auf Band Mitte:VH_L drehung 12 gespiegelt abstand 0,5\n")
+            .unwrap();
+        assert_eq!(z.angaben[0].drehung_grad, 12.0);
+        assert!(z.angaben[0].gespiegelt);
+        assert_eq!(z.angaben[0].abstand, Some(0.005));
+        // Leere Seite, doppelt, oder mit einer eigenen Zahl in Feld 1/3/4:
+        // jeweils ein Fehler statt einer stillen Zahl.
+        assert!(lies_lage("F | - | HD0 | - | - | auf :VPB\n").is_err());
+        assert!(lies_lage("F | - | HD0 | - | - | auf Band Mitte:\n").is_err());
+        assert!(lies_lage("F | - | HD0 | - | - | auf A:B auf C:D\n").is_err());
+        assert!(lies_lage("F | rumpf | HD0 | - | - | auf A:B\n").is_err());
+        assert!(lies_lage("F | - | HD0 | vorn | - | auf A:B\n").is_err());
+        assert!(lies_lage("F | - | HD0 | - | 0 | auf A:B\n").is_err());
+        // Ohne Punktnamen braucht das Teil seinen eigenen Punkt in Feld 3.
+        assert!(lies_lage("F | - | - | - | - | auf Band Mitte\n").is_err());
+        // Mit Punktnamen darf Feld 3 leer bleiben: die Mitte des Teils.
+        assert!(lies_lage("F | - | - | - | - | auf Band Mitte:VPB\n").is_ok());
     }
 }
 
