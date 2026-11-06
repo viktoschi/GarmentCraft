@@ -195,8 +195,9 @@ pub fn koerper_mit_skelett(mh: &Path, hoehe_mm: f64) -> Result<(GeladenerKoerper
     ))
 }
 
-/// Writes the three per-frame files of [`bewegen`] into a folder:
-/// `bild_NNNN.obj` (mm), `dehnung_NNNN.csv` and `abstand_NNNN.csv`.
+/// Writes the per-frame files of [`bewegen`] into a folder:
+/// `bild_NNNN.obj` (mm), `dehnung_NNNN.csv` and `abstand_NNNN.csv`, and — once
+/// the motion is complete — the whole thing as `bewegung.glb`.
 ///
 /// It lives here, not in the command line, so that a test can check the very
 /// same bytes the command writes — the acceptance asks for that and for a
@@ -205,6 +206,9 @@ pub fn koerper_mit_skelett(mh: &Path, hoehe_mm: f64) -> Result<(GeladenerKoerper
 pub struct Schreiber {
     ordner: std::path::PathBuf,
     angelegt: bool,
+    /// The motion so far, for [`Self::abschluss`]. A glTF carries a morph
+    /// target per frame, so the frames cannot be written one by one.
+    bewegung: Option<crate::gltf::Bewegung>,
 }
 
 impl Schreiber {
@@ -213,6 +217,7 @@ impl Schreiber {
         Schreiber {
             ordner: ordner.into(),
             angelegt: false,
+            bewegung: None,
         }
     }
 
@@ -225,20 +230,41 @@ impl Schreiber {
         ]
     }
 
+    /// The one path the whole motion goes to, written by [`Self::abschluss`].
+    pub fn glb_pfad(ordner: &Path) -> std::path::PathBuf {
+        ordner.join("bewegung.glb")
+    }
+
     /// The folder these files go to.
     pub fn ordner(&self) -> &Path {
         &self.ordner
     }
 
-    /// Writes one frame. Measuring happens here, against the body in `s`, which
-    /// is the body of that frame.
-    pub fn bild(&mut self, b: &Bildbericht, s: &Szene) -> Result<(), Fehler> {
-        let datei = |e: std::io::Error, p: &Path| Fehler::Datei(format!("{}: {e}", p.display()));
+    /// Where [`Self::abschluss`] writes the motion.
+    pub fn bewegung_pfad(&self) -> std::path::PathBuf {
+        Self::glb_pfad(&self.ordner)
+    }
+
+    /// Motion frames collected so far; frame 0 is the state as handed in.
+    pub fn bilder(&self) -> usize {
+        self.bewegung.as_ref().map_or(0, |m| m.bilder())
+    }
+
+    fn anlegen(&mut self) -> Result<(), Fehler> {
         if !self.angelegt {
-            std::fs::create_dir_all(&self.ordner)
-                .map_err(|e| datei(e, &self.ordner))?;
+            std::fs::create_dir_all(&self.ordner).map_err(|e| {
+                Fehler::Datei(format!("{}: {e}", self.ordner.display()))
+            })?;
             self.angelegt = true;
         }
+        Ok(())
+    }
+
+    /// Writes one frame, and keeps it for [`Self::abschluss`]. Measuring happens
+    /// here, against the body in `s`, which is the body of that frame.
+    pub fn bild(&mut self, b: &Bildbericht, s: &Szene) -> Result<(), Fehler> {
+        let datei = |e: std::io::Error, p: &Path| Fehler::Datei(format!("{}: {e}", p.display()));
+        self.anlegen()?;
         let [obj, dehn, abst] = Self::pfade(&self.ordner, b.bild);
         std::fs::write(&obj, ausgabe::obj(s)).map_err(|e| datei(e, &obj))?;
         std::fs::write(&dehn, dehnung::Karte::messe(s).csv(s)).map_err(|e| datei(e, &dehn))?;
@@ -246,6 +272,29 @@ impl Schreiber {
             Fehler::Koerper("die Szene hat keinen Körper; es gibt keinen Abstand zur Haut".into())
         })?;
         std::fs::write(&abst, karte.csv(s)).map_err(|e| datei(e, &abst))?;
+
+        match self.bewegung.as_mut() {
+            None => self.bewegung = Some(crate::gltf::Bewegung::neu(s).map_err(glb)?),
+            Some(m) => m.bild(s).map_err(glb)?,
+        }
         Ok(())
     }
+
+    /// Writes `bewegung.glb` out of the frames collected so far. Called once,
+    /// after the last frame; calling it with no frame at all writes nothing.
+    pub fn abschluss(&mut self) -> Result<(), Fehler> {
+        if self.bewegung.is_none() {
+            return Ok(());
+        }
+        self.anlegen()?;
+        let p = Self::glb_pfad(&self.ordner);
+        let daten = self.bewegung.as_ref().expect("oben geprüft").glb();
+        std::fs::write(&p, daten)
+            .map_err(|e| Fehler::Datei(format!("{}: {e}", p.display())))
+    }
+}
+
+/// A glTF bookkeeping error, named after the file it would have gone to.
+fn glb(m: String) -> Fehler {
+    Fehler::Datei(format!("bewegung.glb: {m}"))
 }

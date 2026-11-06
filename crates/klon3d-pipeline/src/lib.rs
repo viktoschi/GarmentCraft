@@ -31,6 +31,7 @@
 pub mod ablauf;
 pub mod bewegen;
 pub mod dxf;
+pub mod gltf;
 pub mod stoff;
 
 use std::collections::HashMap;

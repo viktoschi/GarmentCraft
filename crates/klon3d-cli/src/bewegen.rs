@@ -271,6 +271,13 @@ pub fn befehl_bewegen(args: &[String]) -> ExitCode {
     if let Err(e) = lauf {
         return fehler(e);
     }
+    // The glTF is complete only now: one morph target per frame, so the frames
+    // cannot be written as they come.
+    if let Some(w) = schreiber.as_mut() {
+        if let Err(e) = w.abschluss() {
+            return fehler(e.to_string());
+        }
+    }
 
     println!("  Bild  Grad      Zeit      tiefster  offene Nahtpaare");
     for (bild, g, ms, tief, offen) in &zeilen {
@@ -286,10 +293,17 @@ pub fn befehl_bewegen(args: &[String]) -> ExitCode {
         }
         let je_bild = zeilen.iter().filter(|z| z.0 > 0).count();
         println!(
-            "  geschrieben  {} (bild_NNNN.obj, dehnung_NNNN.csv, abstand_NNNN.csv für {} Bilder, lauf.csv)",
+            "  geschrieben  {} (bild_NNNN.obj, dehnung_NNNN.csv, abstand_NNNN.csv für {} Bilder, bewegung.glb, lauf.csv)",
             o.display(),
             zeilen.len()
         );
+        if let Some(w) = &schreiber {
+            println!(
+                "  glTF         {} ({} Bilder als Morph-Targets, STEP, ein Mesh je Teil und eines für den Körper)",
+                w.bewegung_pfad().display(),
+                w.bilder()
+            );
+        }
         if je_bild > 0 {
             let schnitt = zeilen.iter().filter(|z| z.0 > 0).map(|z| z.2).sum::<f64>() / je_bild as f64;
             println!("  Zeit Bewegung {je_bild} Bilder, {schnitt:.1} ms im Mittel (einschließlich Messen und Schreiben)");

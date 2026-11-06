@@ -11,3 +11,8 @@ klon3d-pattern = { path = "../klon3d-pattern" }
 klon3d-koerper = { path = "../klon3d-koerper" }
 klon3d-mesh = { path = "../klon3d-mesh" }
 klon3d-sim = { path = "../klon3d-sim" }
+
+[dev-dependencies]
+# The glTF test reads the written file back as JSON instead of trusting the
+# writer's own bookkeeping.
+serde_json = "1"

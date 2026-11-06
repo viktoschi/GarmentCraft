@@ -1598,6 +1598,7 @@ dependencies = [
  "klon3d-mesh",
  "klon3d-pattern",
  "klon3d-sim",
+ "serde_json",
 ]
 
 [[package]]
