@@ -4,8 +4,8 @@
 //! Checked here, and nowhere else, are the promises of `klon3d bewegen`:
 //!
 //! * **No gaps.** `bild_0000.obj` (the dressed rest state) plus one OBJ, one
-//!   strain map and one distance map per motion frame — the folder holds
-//!   exactly those files and nothing else.
+//!   strain map and one distance map per motion frame, and `bewegung.glb` for
+//!   the whole motion — the folder holds exactly those files and nothing else.
 //! * **The map belongs to its frame.** Every distance in `abstand_NNNN.csv` is
 //!   the distance to a fresh rebuild of the *same* posed points, and it is
 //!   **not** the distance to the bind pose. That is the whole point of writing
@@ -188,6 +188,7 @@ fn jedes_bild_wird_geschrieben() {
             gesehen.push((b.clone(), s.clone()));
         })
         .expect("bewegen");
+        schreiber.abschluss().expect("glTF schreiben");
         eprintln!(
             "Lauf {lauf}: {} Bilder, zuletzt {:.1}°, tiefster {:+.2} mm, offene Nahtpaare {}",
             gesehen.len(),
@@ -220,11 +221,18 @@ fn jedes_bild_wird_geschrieben() {
             erwartet_namen.push(p.file_name().unwrap().to_string_lossy().into_owned());
         }
     }
+    erwartet_namen.push(
+        Schreiber::glb_pfad(&ordner[0])
+            .file_name()
+            .unwrap()
+            .to_string_lossy()
+            .into_owned(),
+    );
     erwartet_namen.sort();
     assert_eq!(
         dateien(&ordner[0]),
         erwartet_namen,
-        "je Bild OBJ, Dehnung und Abstand, sonst nichts"
+        "je Bild OBJ, Dehnung und Abstand, dazu die eine glTF, sonst nichts"
     );
     assert!(ordner[0].join("bild_0000.obj").is_file(), "der Ruhezustand fehlt");
 
@@ -344,6 +352,13 @@ fn jedes_bild_wird_geschrieben() {
             );
         }
     }
+    let ga = Schreiber::glb_pfad(&ordner[0]);
+    let gb = Schreiber::glb_pfad(&ordner[1]);
+    assert_eq!(
+        std::fs::read(&ga).unwrap(),
+        std::fs::read(&gb).unwrap(),
+        "bewegung.glb unterscheidet sich zwischen zwei Läufen"
+    );
 
     // ── Format bleibt das der Stufe 5 ────────────────────────────────────
     assert_eq!(kopf_abstand, "punkt;teil;x_cm;y_cm;z_cm;abstand_mm;nx;ny;nz");
