@@ -78,6 +78,10 @@ fn anziehen_netz(name: &str, netz: &Musternetz, liste: &Lageliste, k: &Koerperne
     };
     let param = Simparameter { schwerkraft: [0.0, 0.0, -9.81], daempfung: 1.0, ..Simparameter::default() };
     let mut s = Szene::aus_netz(&p.netz, &vg, &|ti, q| p.lage(ti, q), vec![Koerper::netz(k.clone())], param);
+    // The glue zones from the placement file are part of the scene: without
+    // them a glued-on patch falls off (`klon3d anziehen` sets them the same way).
+    let zonen = p.klebungen(&s).into_iter().map(|(z, _)| z).collect();
+    s.klebungen_setzen(zonen);
     let mut rw = ImplizitCg::neu(ImplizitParameter::default());
     let erg = anziehen(&mut s, &mut rw, ablauf, &mut |_, _, _| {});
     let (mut alle, mut zu, mut mediane) = (0usize, 0usize, Vec::new());
@@ -114,6 +118,11 @@ fn anziehen_netz(name: &str, netz: &Musternetz, liste: &Lageliste, k: &Koerperne
 fn klebezone_aus_der_lage() {
     let Some((_k, h)) = band::pruefkoerper() else { return };
     let (netz, mut liste) = bluse();
+    // Der Fall allein: die Klebungen der echten Lagedatei bleiben draussen,
+    // damit genau eine Zone geprueft wird.
+    for a in &mut liste.angaben {
+        a.klebt_auf = None;
+    }
     let angabe = liste
         .angaben
         .iter_mut()
@@ -151,26 +160,97 @@ fn klebezone_aus_der_lage() {
     assert!(platziere(&netz, &falsch, &h).is_err());
 }
 
-/// Die Lage vor dem Nähen: 16 genähte Teile platziert, die 12 aufgeklebten
-/// weggelassen, alle 24 Nähte da; kein Punkt tiefer als 5 mm in der Haut
-/// (der Kollider findet bis 10 mm). Nähte zwischen Teilen eines Blocks mit
-/// gemeinsamen Punkten (hintere Mitte, Untercup an Band Mitte) liegen schon
-/// aufeinander.
+/// Die Klebezonen der Bluse (Aufgabe #102): alle 12 aufgeklebten Teile sind
+/// über die Lagedatei gebunden, jede Zone hat einen Träger, die Zahl der
+/// gebundenen Punkte ist die Punktzahl des oberen Teils, und eine Zone, deren
+/// Träger nicht unter ihr liegt, wird als offen gemeldet statt als heil.
+#[test]
+#[cfg_attr(debug_assertions, ignore = "nur mit --release")]
+fn klebungen_der_bluse() {
+    let Some((_k, h)) = band::pruefkoerper() else { return };
+    let (netz, liste) = bluse();
+    let p = platziere(&netz, &liste, &h).unwrap();
+    let vg = Teilvorgabe { material: RADICAL_RUBBER_04, reduktion: 0.0 };
+    let s = Szene::aus_netz(&p.netz, &|_| vg, &|ti, q| p.lage(ti, q), vec![], Simparameter::default());
+
+    // Ein Punkt des oberen Teils ist entweder gebunden oder als offen gezaehlt;
+    // mehr darf es nicht geben, sonst fehlt eine Bindung still.
+    let ti = |name: &str| {
+        p.netz
+            .teile
+            .iter()
+            .position(|t| t.teil == name || t.teil.rsplit(" - ").next() == Some(name))
+            .unwrap_or_else(|| panic!("{name} nicht platziert"))
+    };
+    // Punktzahlen der Vernetzung (Zielkante 10 mm) - die Zahlen, die der
+    // Klebungsbericht von `klon3d anziehen` je Zone druckt.
+    let erwartet = [
+        ("Trim Oeffnung Links", 65),
+        ("Trim Oeffnung Rechts", 65),
+        ("Stehkragen Aussen gestuft", 200),
+        ("Donut Bruecke", 71),
+        ("Scheibe Saum Links", 74),
+        ("Scheibe Saum Rechts", 74),
+        ("Scheibe Achsel Links", 74),
+        ("Scheibe Achsel Rechts", 74),
+        ("Scheibe Frog Schlaufe", 74),
+        ("Scheibe Frog Knebel", 74),
+        ("Halbe Scheibe Kragenende Links", 44),
+        ("Halbe Scheibe Kragenende Rechts", 44),
+    ];
+    let zonen = p.klebungen(&s);
+    assert_eq!(zonen.len(), erwartet.len(), "eine Zone je aufgeklebtem Teil");
+    for (zone, ohne) in &zonen {
+        // Name der Zone: "<Teil> auf <Traeger>".
+        let (teil, traeger) = zone.name.split_once(" auf ").expect("Zone ohne Träger");
+        let teil = teil.trim_start_matches("Bluse 3 - ");
+        let (_, punkte) = erwartet
+            .iter()
+            .find(|(name, _)| *name == teil)
+            .unwrap_or_else(|| panic!("unerwartete Zone {teil}"));
+        assert_eq!(zone.len() + ohne, s.teile[ti(teil)].punkte.len(), "{teil}: Bilanz der Punkte");
+        assert_eq!(zone.len(), *punkte, "{teil}: gebundene Punkte");
+        assert_eq!(*ohne, 0, "{teil} liegt ganz auf {traeger}, hat aber offene Punkte");
+        // Frisch platziert ist der Ruheversatz gehalten.
+        assert!(zone.groesster_abstand(&s.x) < 1e-9, "{teil}: Restabstand {:.3} mm", zone.groesster_abstand(&s.x) * 1e3);
+        // Die Steifigkeit kommt aus dem Stoff und der Zahl der Bindungen.
+        let erwartet_steif = RADICAL_RUBBER_04.dehnung_n_m * zone.len() as f64;
+        assert!((zone.steifigkeit - erwartet_steif).abs() <= 1e-9 * erwartet_steif, "{teil}: Steifigkeit");
+    }
+
+    // Ein Träger, der nicht unter dem Flicken liegt, ist ein offener Kleberand:
+    // die Zone entsteht, bindet aber keinen Punkt - und sagt das auch.
+    let mut falsch = liste.clone();
+    let donut = falsch.angaben.iter_mut().find(|a| a.teil == "Donut Bruecke").unwrap();
+    donut.klebt_auf = Some("Rueckenteil Mitte Links".into());
+    let pf = platziere(&netz, &falsch, &h).unwrap();
+    let sf = Szene::aus_netz(&pf.netz, &|_| vg, &|ti, q| pf.lage(ti, q), vec![], Simparameter::default());
+    let zonen = pf.klebungen(&sf);
+    let (zone, ohne) = zonen
+        .iter()
+        .find(|(z, _)| z.name.starts_with("Bluse 3 - Donut Bruecke"))
+        .expect("Zone des Donuts");
+    assert_eq!(zone.len(), 0, "der Donut liegt nicht auf dem Vorderteil");
+    assert_eq!(*ohne, sf.teile[ti("Donut Bruecke")].punkte.len(), "alle Punkte als offen gemeldet");
+}
+
+/// Die Lage vor dem Nähen: alle 28 Teile platziert, die 12 aufgeklebten auf
+/// ihren Träger (`auf`/`klebt` in der Lagedatei), alle 24 Nähte da; kein Punkt
+/// tiefer als 5 mm in der Haut (der Kollider findet bis 10 mm). Nähte zwischen
+/// Teilen eines Blocks mit gemeinsamen Punkten (hintere Mitte, Untercup an
+/// Band Mitte) liegen schon aufeinander.
 #[test]
 #[cfg_attr(debug_assertions, ignore = "nur mit --release")]
 fn bluse_platzieren() {
     let Some((k, h)) = band::pruefkoerper() else { return };
     let (netz, liste) = bluse();
     let p = platziere(&netz, &liste, &h).unwrap();
-    assert_eq!(p.netz.teile.len(), 16);
-    assert_eq!(p.weggelassen.len(), 12);
+    assert_eq!(p.netz.teile.len(), 28);
+    assert!(p.weggelassen.is_empty(), "weggelassen: {:?}", p.weggelassen);
     assert_eq!(p.netz.naehte.len(), 24);
     assert!(p.naehte_weggelassen.is_empty());
     let vg = Teilvorgabe { material: RADICAL_RUBBER_04, reduktion: 0.0 };
     let s = Szene::aus_netz(&p.netz, &|_| vg, &|ti, q| p.lage(ti, q), vec![], Simparameter::default());
-    // Ohne `klebt` in der Lagedatei entsteht keine Klebezone - bestehende
-    // Muster rechnen unveraendert (Rueckwaertsvertraeglichkeit).
-    assert!(p.klebungen(&s).is_empty(), "Klebezone ohne `klebt` in der Lage");
     let tiefster = s.x.iter().map(|&q| k.naechster_alle(q).abstand).fold(f64::INFINITY, f64::min);
     assert!(tiefster > -5e-3, "Punkt {:.1} mm in der Haut", tiefster * 1e3);
     for (kennung, d) in messung::nahtabstaende(&s, &p.netz) {
@@ -189,9 +269,12 @@ fn bluse_platzieren() {
 /// hold phase (findings 102). It comes to rest (below 0.015 m/s: with exactly
 /// solved steps the damping of the truncated CG is missing, hems still move by
 /// 1 cm/s without sinking), no point inside the skin, every seam with a median
-/// below 3 mm, at least 98 % of all seam pairs within 10 mm (measured 99.7 %;
-/// findings 98 with 50 iterations 99.4 %, findings 96 with 500 N/m: 98.6 %), no
-/// piece sinks more than 5 mm in the hold phase (ADR-023). The
+/// below 3 mm, at least 98 % of all seam pairs within 10 mm (measured 99.7 % on
+/// the 16 sewn pieces; findings 98 with 50 iterations 99.4 %, findings 96 with
+/// 500 N/m: 98.6 %), no piece sinks more than 5 mm in the hold phase (ADR-023).
+/// With the 12 glued-on pieces of task #102 the same run closes 98.6 % of 715
+/// pairs - the glued trims pull on the front pieces, the sleeves give way
+/// (N05/N06/N07, medians 0.1 mm, single pairs 18-25 mm). The
 /// body-point-against-cloth-triangle check is no longer measurable on the seam
 /// pairs at five substeps (both runs 99.7 %); that it does take effect is shown
 /// by `tuch_ueber_spitze` (tip 0.0 against 7.5 mm through the cloth).
@@ -208,8 +291,8 @@ fn bluse_anziehen_am_koerper() {
     assert!(mit.tiefster > -0.1e-3, "Punkt {:.2} mm in der Haut", mit.tiefster * 1e3);
     assert!(mit.anteil >= 0.98, "nur {:.1} % der Nahtpaare zu", mit.anteil * 100.0);
     assert!(mit.sinken.1 < 5e-3, "{} sinkt {:.1} mm", mit.sinken.0, mit.sinken.1 * 1e3);
-    // At five substeps both runs are equally good (99.7 %); the check must not
-    // make the result worse.
+    // At five substeps both runs are equally good; the check must not make the
+    // result worse.
     assert!(
         mit.anteil >= ohne.anteil - 1e-9,
         "Körperpunkt gegen Stoffdreieck verschlechtert: {:.3} gegen {:.3}",
@@ -285,7 +368,13 @@ fn lagevorschlag_wie_handlage() {
         let l = schlage_lage_vor(&ev, Kurvenquelle::Seamly, &defs, &gespiegelt, name).unwrap();
         let (netz, hand) = pruefmuster(name);
         let (p, q) = (platziere(&netz, &lies_lage(&l.text).unwrap(), &h).unwrap(), platziere(&netz, &hand, &h).unwrap());
-        assert_eq!(p.netz.teile.len(), q.netz.teile.len(), "{name}: andere Teile platziert");
+        // Der Vorschlag kennt nur Teile mit eigener Bogenlage; die aufgeklebten
+        // Stücke der Handlage (`auf <Traeger>`) haben dort keine Zeile. Verglichen
+        // wird deshalb der Teil, den beide platzieren.
+        assert!(p.netz.teile.len() <= q.netz.teile.len(), "{name}: mehr Teile als die Handlage");
+        for t in &p.netz.teile {
+            assert!(q.netz.teile.iter().any(|u| u.teil == t.teil), "{name}: {} fehlt in der Handlage", t.teil);
+        }
         let mut summe = 0.0;
         for (ti, t) in p.netz.teile.iter().enumerate() {
             let tj = q.netz.teile.iter().position(|u| u.teil == t.teil).unwrap();
