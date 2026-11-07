@@ -66,6 +66,7 @@
 //! Slots. Dieselbe Slot-Nummer meint bei zwei Nachbarn verschiedene Knochen;
 //! ein Mittel über Slots mischt also Knochen, die gar nicht benachbart sind.
 
+use crate::dualquat::{mische, DualQuat};
 use crate::koerper_quelle::GELENK_PREFIX;
 use crate::Punkt3;
 
@@ -100,6 +101,27 @@ pub const ALPHA: f64 = 0.5;
 pub const RADIUS_MIN: f64 = 20.0;
 /// Perzentil, aus dem der Knochenradius kommt.
 pub const PERZENTIL: f64 = 60.0;
+
+/// Wie die Haut zwischen den Knochen gemischt wird.
+///
+/// Beide Verfahren benutzen dieselben Transformationen und dieselben Gewichte;
+/// sie unterscheiden sich nur darin, **was** gemittelt wird. [`Linear`] mittelt
+/// die Bildpunkte und schrumpft dabei, wo zwei Knochen in verschiedene
+/// Richtungen ziehen („Candy-Wrapper"). [`Dual`] mittelt die Transformationen
+/// selbst und bleibt starr. Der Vorgabewert ist [`Linear`], weil das die
+/// gemessene Abnahme von Issue #94 ist und sich dort nichts still ändern darf.
+///
+/// [`Linear`]: Verformung::Linear
+/// [`Dual`]: Verformung::Dual
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum Verformung {
+    /// Linear Blend Skinning: `p' = Σ w_g · (p · B_g⁻¹ · A_g)`.
+    #[default]
+    Linear,
+    /// Dual Quaternion Skinning: die Transformationen werden gemischt, dann
+    /// angewandt ([`Skelett::verforme_dual`]).
+    Dual,
+}
 
 /// Ein Gelenk: Name, Elternteil, Binde-Pose, aktuelle Pose.
 ///
@@ -691,6 +713,55 @@ impl Skelett {
         Some(out)
     }
 
+    /// Verformt Punkte mit der aktuellen Pose, gemischt als **duale
+    /// Quaternionen** statt als Punkte.
+    ///
+    /// Dieselben Transformationen `B_g⁻¹ · A_g`, dieselben Gewichte — nur wird
+    /// nicht der Bildpunkt gemittelt, sondern die Transformation selbst in
+    /// [`crate::dualquat::mische`] und danach auf die Einheitsdualquaternionen
+    /// zurückgeführt. Wo zwei Knochen in verschiedene Richtungen ziehen, bleibt
+    /// das Ergebnis dadurch starr, statt zu schrumpfen.
+    ///
+    /// `None`, wenn eine Binde-Matrix nicht starr ist oder ein Punkt nur
+    /// gegenläufige Drehungen hat, deren Summe keine Drehung mehr ist. Welches
+    /// Verfahren gilt, entscheidet der Aufrufer: [`Verformung`].
+    pub fn verforme_dual(&self, punkte: &[Punkt3]) -> Option<Vec<Punkt3>> {
+        if self.gewichte.len() != punkte.len() {
+            return None;
+        }
+        let mut tf = Vec::with_capacity(self.gelenke.len());
+        for g in &self.gelenke {
+            tf.push(DualQuat::aus_starr(mul(starr_invers(g.binde)?, g.aktuell))?);
+        }
+        let mut out = Vec::with_capacity(punkte.len());
+        for (i, p) in punkte.iter().enumerate() {
+            let summe: f64 = self.gewichte[i].iter().map(|&(_, w)| w).sum();
+            if summe.abs() < 1e-12 {
+                out.push(*p);
+                continue;
+            }
+            // Erst auf Summe 1 bringen: die Normalisierung in `mische` teilt
+            // durch |q_r| und nicht durch die Gewichtssumme.
+            let teile: Vec<(DualQuat, f64)> = self.gewichte[i]
+                .iter()
+                .map(|&(g, w)| (tf[g], w / summe))
+                .collect();
+            out.push(mische(&teile)?.auf(*p));
+        }
+        Some(out)
+    }
+
+    /// Verformt Punkte mit dem gewählten Verfahren.
+    ///
+    /// Der eine Aufruf für Aufrufer, die den Unterschied messen wollen, ohne
+    /// beide Methoden zu kennen.
+    pub fn verforme_mit(&self, verformung: Verformung, punkte: &[Punkt3]) -> Option<Vec<Punkt3>> {
+        match verformung {
+            Verformung::Linear => self.verforme(punkte),
+            Verformung::Dual => self.verforme_dual(punkte),
+        }
+    }
+
     /// Die grösste Abweichung der Gewichtssumme von 1,0.
     pub fn gewichtssumme_abweichung(&self) -> f64 {
         self.gewichte
@@ -736,16 +807,31 @@ impl Skelett {
     /// Dazu die Schulter selbst: Punkte 20–70 mm vom linken Schultergelenk
     /// sollen ihren Abstand zu ihm etwa halten (Median des Verhältnisses nahe
     /// 1); die Binde-Pose muss den Körper unverändert lassen.
+    ///
+    /// Das ist die Abnahme für **lineare** Mischung, wie sie Issue #94
+    /// festgeschrieben hat. Für den Vergleich beider Verfahren dieselbe
+    /// Rechnung mit [`Self::abnahme_mit`].
     pub fn abnahme(&self, punkte: &[Punkt3], dreiecke: &[[usize; 3]], grad: f64) -> Option<Abnahme> {
+        self.abnahme_mit(Verformung::Linear, punkte, dreiecke, grad)
+    }
+
+    /// Dieselbe Abnahme für ein gewähltes Verfahren.
+    pub fn abnahme_mit(
+        &self,
+        verformung: Verformung,
+        punkte: &[Punkt3],
+        dreiecke: &[[usize; 3]],
+        grad: f64,
+    ) -> Option<Abnahme> {
         // Der Körper, wie er in der Binde-Pose steht.
         let binde = {
             let mut s = self.clone();
             s.zuruecksetzen();
-            s.verforme(punkte)?
+            s.verforme_mit(verformung, punkte)?
         };
         let mut s = self.clone();
         s.hebe_arme(grad);
-        let neu = s.verforme(punkte)?;
+        let neu = s.verforme_mit(verformung, punkte)?;
 
         let kanten = randkanten(punkte.len(), dreiecke);
         let schultern: Vec<Punkt3> = ["l-shoulder", "r-shoulder"]
