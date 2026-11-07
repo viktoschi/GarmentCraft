@@ -24,6 +24,15 @@
 //!    the skin, over the top of the shoulder, as the area-weighted median.
 //!    Floor 10 mm of air - that is what a finger finds under the cap; the real
 //!    garment stands off about 3 cm.
+//!
+//!    This one is expected **not** to show, and `tests/aermelkugel.rs` measures
+//!    why on the pattern: `#ArmholeSolved` cuts the armhole as long as the cap,
+//!    so the sleeve carries no ease along the seam (`-0.00 mm` on both cap
+//!    seams) and is only 14.50 cm tall against the body's 14.0 cm. Placed but
+//!    not sewn it lies 10.7 mm off the skin, and pairing two equally long edges
+//!    brings that down to 0.7 mm (0.5 mm on a rerun). A real cap stands off
+//!    because it is *longer* than its armhole and the surplus has to be eased
+//!    in; v26 is not cut that way, so a seated cap is the correct result here.
 //! 3. **Tension at the shoulder blade.** Area-weighted median strain of the
 //!    back pieces in the shoulder-blade zone against the median of the same
 //!    pieces. Floor 2 percentage points - above the run-to-run spread of a
@@ -507,10 +516,13 @@ fn bluse2_stehend() {
         "Fehler 1 nicht gezeigt: Plunge-Öffnung an der Brust {:+.1} mm gegen das Muster",
         (oeffnung_brust - MUSTER_OEFFNUNG_BRUST) * 1e3
     );
-    // Fehler 2 wird **nicht** gezeigt (Stand 01.11.2026): die Kugel liegt an.
-    // Die Nahtliste näht die Kugel 1:1 auf das Armloch; der Überschuss des
-    // echten Teils steckt in der Kugelform und kommt hier nicht vor. Der Test
-    // hält den Befund fest, damit ein gehobener Stand auffällt.
+    // Fehler 2 wird **nicht** gezeigt, und das ist bei diesem Muster richtig so
+    // (belegt in `tests/aermelkugel.rs`): `#ArmholeSolved` schneidet das
+    // Armloch genau so lang wie die Kugel (-0,00 mm Unterschied), die Kugel ist
+    // im Zuschnitt 14,50 statt 14,0 cm hoch, und die Naht paart zwei gleich
+    // lange Kanten. Ein echter Überschuss, der eingehalten werden müsste und
+    // die Kugel abhebt, ist in v26 nicht vorhanden. Der Test hält den Befund
+    // fest, damit ein gehobener Stand auffällt.
     assert!(
         kugel_med < LUFT_GRENZE,
         "Fehler 2 jetzt gezeigt: Ärmelkugel steht im Median {:.1} mm ab - Befund im Testkopf neu lesen",

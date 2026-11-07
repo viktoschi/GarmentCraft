@@ -945,17 +945,43 @@ What `bluse2_stehend` measures on the shaped body (2026-11-01, stage 4d):
 | Fault | Metric | Measured | Floor | Shown |
 |---|---|---|---|---|
 | 1 Plunge edges slide | opening at the bust, against the 130.0 mm of the flat pattern | 130.0 → 175.3 mm (+45.3) | +10 mm | **yes** |
-| 2 Sleeve cap stands off | air under the cap over the shoulder, area-weighted median | 0.7 mm | 10 mm | **no** |
+| 2 Sleeve cap stands off | air under the cap over the shoulder, area-weighted median | 0.7 mm (0.5 mm on a rerun 2026-11-07) | 10 mm | **no**, see below |
 | 3 Tension at the shoulder blade | strain there against the back pieces as a whole | +11.08 % against +5.84 % (+5.24 pp) | 2 pp | **yes** |
 | 4 Sleeve too tight | strain around the arm at armpit height | +4.94 % | 2 % | **yes** |
 | 5 Collar stands open | air under its free upper edge at the two front ends | 31.2 mm (ends 143.0 mm apart) | 10 mm | **yes** |
 
-Fault 2 is the one that does not appear, and the reason is in the seam list, not
-in the material: cap and armhole measure 41.5308 and 41.5310 cm, so sewing them
-point to point leaves no excess to lift. On the real blouse the cap stands off
-because its *shape* is too full for the armhole, and a seam list that only knows
-pairs of edges cannot express that. The test records the negative result so that
-a later change makes it visible.
+A rerun on 2026-11-07 moved faults 3 and 5 slightly (3: +11.51 % against
++5.93 %, +5.58 pp; 5: 33.0 mm at the ends, 132.8 mm apart) and left the
+acceptance at 769 of 770 seam pairs within 10 mm and the lowest point at
++0.20 mm. The table keeps the 2026-11-01 values as the record; the rerun values
+are within the run-to-run spread of a solve, not a change of the test.
+
+Fault 2 is the one that does not appear. `aermelkugel` measures why, on the
+pattern and on the placement:
+
+- **No ease along the cap.** `#ArmholeSolved` `bluse2_v26.sm2d:252` drops the
+  armpit until the armhole is as long as the cap; both cap seams measure
+  41.53 cm on each side, `-0.00 mm` of difference. The pattern is cut without
+  sleeve-side length beyond the armhole.
+- **Half a centimetre taller, not three.** The cap in the pattern is 14.50 cm
+  against the body's 14.0 cm (`arm_shoulder_tip_to_armfold_line`). The other
+  0.5 cm went into armhole depth, not into stand-off.
+- **The placement arches 6.6 mm, not 30 mm.** Placed but not sewn (no solver
+  step), the cap lies 10.7 mm / 11.0 mm off the skin in the median. Band by band
+  along it: 13.4 mm in the top three centimetres, 8.0 mm in the next, 6.8 mm six
+  to nine centimetres down the arm - an arch of 6.6 mm, and part of that is the
+  gap between the arm prism and the skin, not fullness.
+- **Sewing takes it away again.** `bluse2_stehend` finds 0.5 mm (0.7 mm on
+  2026-11-01, the value in the table) once the seam is closed. Two equally long
+  edges paired point to point leave no surplus to lift.
+
+So the stand-off of the real blouse comes from a cap that is **longer** than its
+armhole: the surplus has to be eased in and lifts the fabric off the shoulder.
+v26 is cut without that surplus by construction, so a seated cap is the right
+result, not a solver failure. Fault 2 cannot be shown with this pattern; the
+entry stays at **no** with this reason, and the measurement stays in
+`tests/aermelkugel.rs` so that a pattern with cap ease - or a cap zone in the
+placement that arches the sleeve over the shoulder - makes it visible.
 
 The plunge opening at the neck is not part of the table: the blouse's neckline
 measures 37.6 cm while the body's neck opening is 32.1 cm, so 5.5 cm cannot close
