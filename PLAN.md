@@ -945,7 +945,7 @@ What `bluse2_stehend` measures on the shaped body (2026-11-01, stage 4d):
 | Fault | Metric | Measured | Floor | Shown |
 |---|---|---|---|---|
 | 1 Plunge edges slide | opening at the bust, against the 130.0 mm of the flat pattern | 130.0 → 175.3 mm (+45.3) | +10 mm | **yes** |
-| 2 Sleeve cap stands off | air under the cap over the shoulder, area-weighted median | 0.7 mm (0.5 mm on a rerun 2026-11-07) | 10 mm | **no**, see below |
+| 2 Sleeve cap stands off | air under the cap over the shoulder, area-weighted median | 0.7 mm (0.5 mm on a rerun 2026-11-07; 0.9 mm on a copy with 15 mm of cap ease, #111) | 10 mm | **no**, see below |
 | 3 Tension at the shoulder blade | strain there against the back pieces as a whole | +11.08 % against +5.84 % (+5.24 pp) | 2 pp | **yes** |
 | 4 Sleeve too tight | strain around the arm at armpit height | +4.94 % | 2 % | **yes** |
 | 5 Collar stands open | air under its free upper edge at the two front ends | 31.2 mm (ends 143.0 mm apart) | 10 mm | **yes** |
@@ -982,6 +982,54 @@ result, not a solver failure. Fault 2 cannot be shown with this pattern; the
 entry stays at **no** with this reason, and the measurement stays in
 `tests/aermelkugel.rs` so that a pattern with cap ease - or a cap zone in the
 placement that arches the sleeve over the shoulder - makes it visible.
+
+### A cap with real ease, and why it still lies on (#111)
+
+`aermelkugel` shows the pattern has no ease; it does not show what happens when
+it has. #111 built that case: `bluse2_v26_einhalte.sm2d`, a **test copy** of v26
+in which a new variable `#CapEase = 0.75 cm` reaches both cap seams, so each is
+**15.0 mm** longer than its armhole (430.3 mm against 415.3 mm, V13 and V14
+alike, every other seam unchanged). The delivered `bluse2_v26.sm2d` is untouched
+so the acceptance numbers above keep their meaning. Twelve formula sites have to
+read the variable, not four: the four `cutSplinePath` intersections of the cap,
+and per sleeve side the four clamp-chain points `AB1T`, `AB1S`, `AB2T`, `AB2S` -
+in their length **and** in their `abs(...) >= 0.12` selection, because a clamp
+that does not see the ease cuts it off again.
+
+`tests/bluse2_stehend_einhalte.rs` dresses that copy twice, with the ease switch
+off and on, 719 s for both runs:
+
+| | cap side sewn | armhole side sewn | air under the cap, median |
+|---|---|---|---|
+| switch off | 465.4 mm (**+8.16 %**) | 491.8 mm (**+18.41 %**) | 1.0 mm (235 points) |
+| switch on | 459.3 mm (**+6.74 %**) | 463.3 mm (**+11.55 %**) | **0.9 mm** (228 points) |
+
+The self-check in that test is the part that makes the numbers readable: placed
+but before any solver step the cap measures 429.9 mm against 430.3 mm and the
+armhole 415.2 mm against 415.3 mm, +0.09 % and +0.02 %, so the length
+measurement is not the error.
+
+The result is a negative with a reason, and the reason is the armhole:
+**76.5 mm of the armhole side's length is stretch, not 15 mm of ease finding a
+home.** Placed bare on the body the armhole is already 41.5 cm long around a 41 cm
+body (the note under the fault table), so it has slack to give before any fabric
+has to gather. The cap side takes only 35.1 mm of stretch. The switch does work -
+520 edges shortened, the armhole side drops from 76.5 mm to 48.0 mm of stretch
+(−6.86 pp) while the cap side drops from 35.1 mm to 29.0 mm (−1.41 pp), and the
+widest single gap under the cap grows from 16.2 mm to 20.7 mm - but the median
+stays at 0.9 mm and the cap does not lift off.
+
+Latex, which this blouse is made of, helps the surplus leave: with a woven fabric
+the longer side holds its length and the cap has to arch (#109, table there).
+The copy is therefore run in latex on purpose and the run names the material, so
+the number is not passed off as a fabric result.
+
+Conclusion for the fault list: **fault 2 stays "not shown", and it is not the
+solver's switch that is missing.** For this pattern the ease has nowhere to go
+because the armhole is cut 5 mm long per side; a cap that stands off needs both -
+ease along the cap **and** an armhole that does not stretch away under it. Both
+facts now have a number (`aermelkugel.rs`, `bluse2_stehend_einhalte.rs`), so the
+next attempt has a criterion instead of another guess.
 
 ### Ease in the solver (#109)
 

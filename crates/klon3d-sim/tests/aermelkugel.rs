@@ -28,8 +28,24 @@
 //! somewhere and lifts the fabric off the shoulder. This pattern is cut without
 //! that surplus by construction, so the simulation correctly produces a seated
 //! cap. Fault 2 is therefore not something the solver can show with v26 - it is
-//! a property of the pattern, and the fault list should say so instead of
-//! reading the 0.7 mm as a solver failure.
+//! a property of the pattern.
+//!
+//! Task #111 ran that claim down the other way: it built a **test copy** of the
+//! pattern whose cap seams are 15.0 mm longer than their armholes
+//! (`bluse2_v26_einhalte.sm2d`), dressed it with
+//! [`Simparameter::einhalteweite`](klon3d_sim::Simparameter::einhalteweite) on
+//! and measured the air under the cap again (`bluse2_stehend_einhalte.rs`). The
+//! cap still lies on the shoulder: 0.9 mm in the median against 10 mm, and the
+//! switch only moves the widest single gap (16.2 mm to 20.7 mm) without lifting
+//! the median. The reason is in the numbers of that run: sewn, the armhole side
+//! is **76.5 mm** longer than its pattern while the cap side takes only 35.1 mm,
+//! so the surplus leaves through the armhole instead of lifting the cap. The
+//! armhole of the copy is cut 41.5 cm long around a 41 cm body and has slack to
+//! give before fabric has to gather; latex, which this blouse is made of,
+//! stretches rather than gathering (#109). Fault 2 is therefore not a knob of
+//! the solver, and the fault list says "not shown" with this reason instead of
+//! reading the 0.7 mm as a solver failure. A cap that stands off needs both:
+//! ease along the cap **and** an armhole that does not stretch away under it.
 //!
 //! Needs the reference body; without it the test prints `übersprungen` and
 //! returns. Release only, like the other placement tests.
