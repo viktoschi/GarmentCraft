@@ -303,6 +303,7 @@ pub fn punkteregen(k: &Koerpernetz) -> Szene {
         teile: Vec::new(),
         klebungen: Vec::new(),
         naht_biegung_ohne: 0,
+        einhalte_kanten: 0,
         koerper: vec![Koerper::netz(k.clone())],
         param: Simparameter { schwerkraft: [0.0, 0.0, -9.81], daempfung: 0.0, ..Simparameter::default() },
         zeit: 0.0,

@@ -31,6 +31,28 @@
 //!   liegen flach aneinander (CLO: Sewing Line Type 180°). Liegen die Teile
 //!   gespiegelt zueinander, fehlt ein flacher Ruhewinkel — dann bleibt die
 //!   Kante ohne Biegung (`naht_biegung_ohne`).
+//!
+//! ## Ease along a seam
+//!
+//! Two sides of a seam are rarely the same length in woven cloth: the sleeve
+//! cap is longer than the armhole and has to be eased in. The mesh pairs the
+//! points at the same arc fraction on both sides, so the surplus is already
+//! spread evenly along the seam — but the seam springs all have rest length 0,
+//! and with equal stiffness on both sides the solver then splits the surplus
+//! **half and half**: the shorter side stretches, the longer one compresses
+//! (measured on 112 mm over a 100 mm chord: 106.40 mm and 106.39 mm, i.e. the
+//! shorter side at +6.40 %).
+//!
+//! [`Simparameter::einhalteweite`] turns that into easing: the boundary springs
+//! of the longer side get the rest length `l · l_short/l_long`, the shorter side
+//! keeps its own. Now the shorter side stays at its pattern length and the
+//! longer one has to accommodate the surplus, which it does by buckling out of
+//! plane. Off by default — latex is cut to match, and a scene that does not ask
+//! for it computes exactly as before.
+//!
+//! The rest lengths are where the three backends agree already (CPU reference,
+//! CG solve, compute shader), so the ease needs no field of its own in the
+//! system. [`Szene::einhalte_kanten`] counts the edges it touched.
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::ops::Range;
@@ -68,6 +90,11 @@ pub struct Simparameter {
     pub daempfung: f64,
     /// Nachgiebigkeit der Naht-Constraints (m/N); 0 = starr.
     pub naht_nachgiebigkeit: f64,
+    /// Ease a seam whose sides differ in length into the longer side
+    /// (see the module docs, "Ease along a seam"). Off by default: latex is cut
+    /// to match, and a scene that does not ask for it must compute exactly as
+    /// before.
+    pub einhalteweite: bool,
 }
 
 impl Default for Simparameter {
@@ -78,6 +105,7 @@ impl Default for Simparameter {
             schwerkraft: [0.0, 0.0, -9.81],
             daempfung: 0.0,
             naht_nachgiebigkeit: 0.0,
+            einhalteweite: false,
         }
     }
 }
@@ -168,6 +196,11 @@ pub struct Szene {
     pub klebungen: Vec<crate::klebung::Zone>,
     /// Genähte Randkanten ohne Biege-Constraint (Teile gespiegelt).
     pub naht_biegung_ohne: usize,
+    /// Boundary edges whose rest length the ease shortened because they lie on
+    /// the longer side of an unequal seam. 0 unless
+    /// [`Simparameter::einhalteweite`] is on. Reported so the ease is never
+    /// silent: an ease that reached no edge did not happen.
+    pub einhalte_kanten: usize,
     pub koerper: Vec<Koerper>,
     pub param: Simparameter,
     /// Simulierte Zeit (s).
@@ -210,6 +243,9 @@ impl Szene {
         // Je Teil: Randkante (lokal, sortiert) → (Gegenpunkt, Dreiecksfläche);
         // 2D-Punkte in m; Plattensteifigkeit.
         let mut randkanten: Vec<BTreeMap<(u32, u32), (u32, f64)>> = Vec::new();
+        // Per piece: boundary edge (local, sorted) → index in `a_r`, so the
+        // ease below can shorten the right springs.
+        let mut randkanten_index: Vec<BTreeMap<(u32, u32), usize>> = Vec::new();
         let mut punkte_m: Vec<Vec<[f64; 2]>> = Vec::new();
         let mut biegesteif: Vec<f64> = Vec::new();
 
@@ -234,6 +270,7 @@ impl Szene {
             }
             // Kanten mit anliegender Fläche, innere Kanten mit Gegenpunkten.
             let mut kanten: BTreeMap<(u32, u32), (f64, Vec<u32>)> = BTreeMap::new();
+            let mut rand_index: BTreeMap<(u32, u32), usize> = BTreeMap::new();
             let d0 = dreiecke.len();
             for d in &t.dreiecke {
                 let (pa, pb, pc) = (p_m[d[0] as usize], p_m[d[1] as usize], p_m[d[2] as usize]);
@@ -278,6 +315,9 @@ impl Szene {
                 a_p.push([i + off as u32, j + off as u32]);
                 a_r.push(l * skala);
                 a_a.push(1.0 / k);
+                if gegen.len() == 1 {
+                    rand_index.insert((i, j), a_r.len() - 1);
+                }
                 if let [o1, o2] = gegen[..] {
                     // Orientierung: Dreieck 1 = (i, j, o) mit positivem Umlauf.
                     let (pi, pj) = (p_m[i as usize], p_m[j as usize]);
@@ -297,6 +337,7 @@ impl Szene {
                 })
                 .collect();
             randkanten.push(rand);
+            randkanten_index.push(rand_index);
             punkte_m.push(p_m);
             biegesteif.push(vg.material.biegung_nm);
             teile.push(Teilinfo {
@@ -361,6 +402,54 @@ impl Szene {
         let n_r = vec![0.0; n_p.len()];
         let n_a = vec![param.naht_nachgiebigkeit; n_p.len()];
 
+        // Ease: a seam whose sides differ in length gathers the surplus into
+        // the **longer** side. The seam pairs already sit at the same arc
+        // fraction on both sides, so the surplus is spread evenly along the
+        // seam; what is missing is the solver's rest length. Shortening the
+        // boundary springs of the longer side by `l_short/l_long` makes the
+        // shorter side keep its length and the longer one buckle instead.
+        //
+        // Doing it through the rest lengths leaves the seam springs as they
+        // are, so the CPU reference, the CG solve and the compute shader all
+        // follow without a new field of their own.
+        let mut einhalte_kanten = 0usize;
+        if param.einhalteweite {
+            let mut gesetzt = BTreeSet::new();
+            for n in &netz.naehte {
+                let (la, lb) = (n.laenge_a_mm, n.laenge_b_mm);
+                if !(la > 0.0 && lb > 0.0) {
+                    continue;
+                }
+                // Same length within rounding: nothing to ease.
+                let faktor = la.min(lb) / la.max(lb);
+                if faktor >= 1.0 - 1e-9 {
+                    continue;
+                }
+                // The longer side is the one that has to give.
+                let lang = if la > lb { 0usize } else { 1usize };
+                for tn in &n.teilnaehte {
+                    let index = if lang == 0 {
+                        &randkanten_index[tn.teil_a]
+                    } else {
+                        &randkanten_index[tn.teil_b]
+                    };
+                    for w in tn.paare.windows(2) {
+                        let (p0, p1) = if lang == 0 { (w[0].a, w[1].a) } else { (w[0].b, w[1].b) };
+                        if p0 == p1 {
+                            continue;
+                        }
+                        let Some(&e) = index.get(&(p0.min(p1), p0.max(p1))) else {
+                            continue;
+                        };
+                        if gesetzt.insert(e) {
+                            a_r[e] *= faktor;
+                            einhalte_kanten += 1;
+                        }
+                    }
+                }
+            }
+        }
+
         let np = x.len();
         let w = masse.iter().map(|&m| if m > 0.0 { 1.0 / m } else { 0.0 }).collect();
         let biegung = Gruppe::geordnet(b_p, b_r, b_a, np);
@@ -383,6 +472,7 @@ impl Szene {
             teile,
             klebungen: Vec::new(),
             naht_biegung_ohne,
+            einhalte_kanten,
             koerper,
             param,
             zeit: 0.0,
