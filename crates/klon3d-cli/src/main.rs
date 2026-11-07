@@ -36,6 +36,7 @@
 
 mod anziehen;
 mod bewegen;
+mod fadenlauf;
 mod stoffwahl;
 mod umriss;
 

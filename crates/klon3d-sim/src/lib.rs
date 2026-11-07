@@ -14,6 +14,7 @@
 //!   Pseudonormalen, Suche im Gitter;
 //! * [`platzierung`] — Schnittteile vor dem Nähen um den Körper legen
 //!   (Hüllkörper, Lagedatei, Abwicklung);
+//! * [`faser`] — die Fadenlaufrichtung je Dreieck im 3D-Netz (Stufe 3);
 //! * [`material`] — Stoffwerte aus CLO-Profilen in SI-Einheiten;
 //! * [`messung`] — Umfang, Dehnung, Nahtspalt, Energie;
 //! * [`abstand`] — Abstandskarte Stoff → Haut: vorzeichenbehaftet je Punkt,
@@ -42,6 +43,7 @@ pub mod ausgabe;
 pub mod cpu;
 pub mod dehnung;
 pub mod faerbung;
+pub mod faser;
 pub mod farbkarte;
 pub mod gpu;
 pub mod implizit;

@@ -122,6 +122,24 @@ fn svg_ohne_Fadenlauf_hat_keine_Linie() {
     assert!(!svg.contains("class=\"fadenlauf\""), "{svg}");
 }
 
+/// The axis as a unit vector: the direction p1 → p2, normalised, in pattern
+/// coordinates. The anchor pair of the inline pattern is (-60,-60) → (200,160).
+#[test]
+fn richtung_ist_ein_Einheitsvektor_in_Musterkoordinaten() {
+    let g = r#"<grainline arrows="0" bottomAnchor="1" topAnchor="3" visible="true"/>"#;
+    let n = netz_mit(g);
+    let f = n.teil("T").expect("Teil T").fadenlauf.expect("Fadenlauf");
+    let d = f.richtung().expect("Achse hat eine Richtung");
+    let (dx, dy) = (f.p2[0] - f.p1[0], f.p2[1] - f.p1[1]);
+    let l = (dx * dx + dy * dy).sqrt();
+    assert!((d[0] - dx / l).abs() < 1e-12 && (d[1] - dy / l).abs() < 1e-12, "{d:?}");
+    // Unit length, and the arrowheads say nothing about the direction.
+    assert!((d[0] * d[0] + d[1] * d[1] - 1.0).abs() < 1e-12);
+    // Pattern x points right, pattern y down: p1 → p2 goes right and down, so
+    // the vector in 3D would be (+x, -y).
+    assert!(d[0] > 0.0 && d[1] > 0.0, "{d:?}");
+}
+
 /// Every grainline in the repository pattern is invisible, so this pattern must
 /// keep meshing without an axis on any piece.
 #[test]

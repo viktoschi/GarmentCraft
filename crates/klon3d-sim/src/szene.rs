@@ -149,6 +149,18 @@ pub struct Szene {
     /// Je Dreieck die Inverse der 2×2-Ruhematrix [p1−p0, p2−p0] (reduziert,
     /// m), zeilenweise, für die Dehnung.
     pub ruhe_inv: Vec<[f64; 4]>,
+    /// Material direction per triangle: a unit vector in the triangle's own
+    /// plane, derived from the piece's grainline through the placement
+    /// (`lage`). Same length as [`Szene::dreiecke`]. Only data for now - the
+    /// material is isotropic, so nothing reads it yet (stage 4).
+    pub faser: Vec<[f64; 3]>,
+    /// Pieces that had to be given the substitute axis (pattern x) because the
+    /// pattern has no readable grainline for them.
+    pub faser_ersatz: usize,
+    /// Triangles whose 3D direction could not be derived (the placement
+    /// collapses the triangle). They take their longest edge instead, and the
+    /// count is reported so the substitute is never silent.
+    pub faser_entartet: usize,
     pub teile: Vec<Teilinfo>,
     /// Glue zones: bonded areas that behave like one plate of the total
     /// thickness ([`crate::klebung`]). Empty by default, so a scene without
@@ -188,6 +200,9 @@ impl Szene {
         let mut reibung = Vec::new();
         let mut dreiecke = Vec::new();
         let mut ruhe_inv = Vec::new();
+        let mut faser = Vec::new();
+        let mut faser_ersatz = 0usize;
+        let mut faser_entartet = 0usize;
         let mut teile = Vec::new();
         let (mut a_p, mut a_r, mut a_a) = (Vec::new(), Vec::new(), Vec::new());
         let (mut b_p, mut b_r, mut b_a) = (Vec::new(), Vec::new(), Vec::new());
@@ -204,6 +219,12 @@ impl Szene {
             let off = x.len();
             versatz.push(off as u32);
             let p_m: Vec<[f64; 2]> = t.punkte.iter().map(|p| [p[0] * 1e-3, p[1] * 1e-3]).collect();
+            // Grainline of the piece in pattern coordinates; a piece without
+            // one takes the substitute axis and is counted as such.
+            let (dir2, ersatz) = crate::faser::richtung(t.fadenlauf);
+            if ersatz {
+                faser_ersatz += 1;
+            }
             for (k, p) in t.punkte.iter().enumerate() {
                 let _ = k;
                 x.push(lage(ti, *p));
@@ -233,6 +254,20 @@ impl Szene {
                 let det = m00 * m11 - m01 * m10;
                 ruhe_inv.push([m11 / det, -m01 / det, -m10 / det, m00 / det]);
                 dreiecke.push([d[0] + off as u32, d[1] + off as u32, d[2] + off as u32]);
+                // The grainline through this triangle's plane. A collapsed
+                // triangle has no plane: it takes its longest edge and is
+                // counted, so the substitute never passes as a measurement.
+                let p3 = [x[off + d[0] as usize], x[off + d[1] as usize], x[off + d[2] as usize]];
+                match crate::faser::im_dreieck(dir2, ruhe_inv[ruhe_inv.len() - 1], p3) {
+                    Some(v) => faser.push(v),
+                    None => {
+                        // No plane to put a direction in: the longest edge, or -
+                        // when all three points coincide - a zero vector that
+                        // only keeps the field aligned with `dreiecke`.
+                        faser_entartet += 1;
+                        faser.push(crate::faser::kante(p3).unwrap_or([0.0; 3]));
+                    }
+                }
             }
             for (&(i, j), (asum, gegen)) in &kanten {
                 let l = l2(p_m[i as usize], p_m[j as usize]);
@@ -342,6 +377,9 @@ impl Szene {
             biegung_grund,
             dreiecke,
             ruhe_inv,
+            faser,
+            faser_ersatz,
+            faser_entartet,
             teile,
             klebungen: Vec::new(),
             naht_biegung_ohne,
