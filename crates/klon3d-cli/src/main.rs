@@ -734,13 +734,20 @@ fn befehl_netz(args: &[String]) -> ExitCode {
 
     println!();
     println!(
-        "  {:<34} {:>6} {:>5} {:>6} {:>6} {:>11} {:>7} {:>7} {:>8}",
-        "Teil", "Punkte", "Rand", "Dreie.", "min∠", "Kante Med/Max", "Sehne", "Länge", "Fläche"
+        "  {:<34} {:>6} {:>5} {:>6} {:>6} {:>11} {:>7} {:>7} {:>8} {:>9}",
+        "Teil", "Punkte", "Rand", "Dreie.", "min∠", "Kante Med/Max", "Sehne", "Länge", "Fläche", "Schnitt"
     );
-    for t in &bericht.teile {
+    for (t, tn) in bericht.teile.iter().zip(&netz.teile) {
         let kurz = t.teil.rsplit(" - ").next().unwrap_or(&t.teil);
+        // Die Schnittlinie steht nur da, wo es eine gibt: ein Teil ohne Zugabe
+        // bekommt `-`, keine `0.0`.
+        let schnitt = if tn.schnitt.len() >= 3 {
+            format!("{:>9.1}", klon3d_mesh::schnitt::ringlaenge(&tn.schnitt))
+        } else {
+            format!("{:>9}", "-")
+        };
         println!(
-            "  {} {:>6} {:>5} {:>6} {:>5.1}° {:>5.1}/{:>5.1} {:>7.4} {:>7.4} {:>+7.3}%",
+            "  {} {:>6} {:>5} {:>6} {:>5.1}° {:>5.1}/{:>5.1} {:>7.4} {:>7.4} {:>+7.3}% {}",
             spalte(kurz, 34),
             t.punkte,
             t.randpunkte,
@@ -750,11 +757,13 @@ fn befehl_netz(args: &[String]) -> ExitCode {
             t.kante_max,
             t.sehne_max,
             t.laenge_max,
-            100.0 * (t.flaeche_netz - t.flaeche_kontur) / t.flaeche_kontur.max(1e-9)
+            100.0 * (t.flaeche_netz - t.flaeche_kontur) / t.flaeche_kontur.max(1e-9),
+            schnitt
         );
     }
     println!("  Kante in mm; Sehne = größter Abstand Randkante–Netzrand, Länge = größte Längenabweichung");
-    println!("  einer Randkante (mm); Fläche = Netz gegen Nahtlinie");
+    println!("  einer Randkante (mm); Fläche = Netz gegen Nahtlinie; Schnitt = Länge der Schnittlinie");
+    println!("  (Nahtlinie + Zugabe, dieselbe Linie wie bei `klon3d umriss`), `-` ohne Zugabe");
     for f in &netz.fehler {
         println!("  nicht vernetzt: {f}");
     }

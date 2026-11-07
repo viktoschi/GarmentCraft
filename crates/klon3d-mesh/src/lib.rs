@@ -31,6 +31,7 @@ mod rand;
 
 pub mod ausgabe;
 pub mod pruefung;
+pub mod schnitt;
 
 use std::collections::BTreeSet;
 
@@ -103,6 +104,13 @@ pub struct Teilnetz {
     pub kanten: Vec<Kantenzug>,
     /// Nahtlinie des Teils (mm), geschlossen gedacht.
     pub kontur: Vec<[f64; 2]>,
+    /// Schnittlinie des Teils (mm), als geschlossener Ring ohne doppelten
+    /// Schlusspunkt; leer, wenn das Teil keine Zugabe hat ([`schnitt`]).
+    ///
+    /// Dieselbe Linie wie die `Schnitt`-Spalte von `klon3d umriss`, der zweiten
+    /// Linie im DXF-Export und der Zugabekontur der 2D-Ansicht. Nur Daten: kein
+    /// Punkt, kein Dreieck und kein Nahtpaar hängt daran.
+    pub schnitt: Vec<[f64; 2]>,
     /// Der Fadenlauf des Teils, im selben Bezugssystem und in derselben
     /// Einheit wie [`Teilnetz::punkte`]; `None` ohne sichtbaren
     /// `<grainline>` (oder wenn er sich nicht auswerten ließ, siehe
@@ -319,6 +327,7 @@ pub fn vernetze(
             punktknoten,
             kanten: g.kanten.clone(),
             kontur: g.kontur.clone(),
+            schnitt: g.schnitt.clone(),
             fadenlauf: g.fadenlauf,
             aufgegeben: *aufgegeben,
         });
