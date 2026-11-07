@@ -126,6 +126,22 @@ pub struct Fadenlauf {
     pub pfeile: u8,
 }
 
+impl Fadenlauf {
+    /// The axis as a unit vector in pattern coordinates (mm, axes as
+    /// [`Teilnetz::punkte`]); `None` when both ends coincide and the axis has no
+    /// direction.
+    ///
+    /// The vector points from `p1` to `p2`. `pfeile` says nothing about the
+    /// direction - it only decides which ends carry an arrowhead - so the sign
+    /// is the one the pattern wrote, and a caller that needs the opposite
+    /// orientation has to say so itself.
+    pub fn richtung(&self) -> Option<[f64; 2]> {
+        let d = [self.p2[0] - self.p1[0], self.p2[1] - self.p1[1]];
+        let l = (d[0] * d[0] + d[1] * d[1]).sqrt();
+        (l > 0.0).then(|| [d[0] / l, d[1] / l])
+    }
+}
+
 /// Wie eine Stelle einer Naht zustande kam.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Stellenart {
