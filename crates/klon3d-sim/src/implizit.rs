@@ -983,6 +983,7 @@ mod tests {
             faser_entartet: 0,
             teile: Vec::new(),
             naht_biegung_ohne: 0,
+            einhalte_kanten: 0,
             klebungen: Vec::new(),
             koerper: Vec::new(),
             param: Simparameter { schwerkraft: [0.0; 3], daempfung: 5.0, ..Simparameter::default() },

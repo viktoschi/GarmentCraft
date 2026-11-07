@@ -983,6 +983,50 @@ entry stays at **no** with this reason, and the measurement stays in
 `tests/aermelkugel.rs` so that a pattern with cap ease - or a cap zone in the
 placement that arches the sleeve over the shoulder - makes it visible.
 
+### Ease in the solver (#109)
+
+The second half of that story is the solver. Until #109 it paired both sides of
+an unequal seam at the same arc fraction and pulled every pair together, so the
+surplus was split half and half: the shorter side stretched and the longer one
+compressed. That is right for a seam of equal length and wrong for a cap.
+
+`Simparameter::einhalteweite` (off by default) shortens the **boundary springs
+of the longer side** by `l_short/l_long`, so that side sits at rest once the
+seam has closed while the shorter one keeps its pattern length. The seam springs
+themselves stay as they are, which matters: nothing new goes into `System`, so
+the XPBD reference, the CPU CG solve and the GPU shader all follow from the same
+rest lengths. `Szene::einhalte_kanten` counts the edges that were shortened, so a
+scene that asked for ease and got none is visible rather than silent.
+
+Measured in `tests/einhalteweite.rs` on a cap of 112 mm of arc over a 100 mm
+chord, in per cent of each side's pattern length:
+
+| fabric | ease | shorter side | longer side |
+|---|---|---|---|
+| Retifist 0.4, woven (bending 6.04e-8 N m) | off / on | +6.40 / **+0.53** | −5.01 / −10.23 |
+| Radical 0.4, latex (bending 2.48e-6 N m) | off / on | +7.99 / +5.08 | −3.60 / −6.24 |
+
+With the switch off both sides meet at 106.4 mm — 100 mm stretched by 6.40 %,
+112 mm shortened by 5.01 %. With it on, 83 % of the 12 mm surplus is gone from
+the longer side, the seam pairs read 0.0021 mm in the median and 0.0181 mm at
+worst, and the shorter side holds to half a per cent.
+
+The **fabric decides whether the ease holds.** Easing means the longer side has
+to fold, and the bending stiffness decides whether it folds or pushes back.
+Latex stretches instead of gathering — with it the switch still moves the surplus
+(the shorter side drops from +7.99 to +5.08 %), but it never reaches the 1 % the
+issue asks for. Woven fabric does. So the acceptance is written on woven fabric
+and latex stays as the counter-measurement in `material_und_falten`.
+
+Two flat rectangles of 100 and 112 mm are a third case, kept as a measurement
+only: there the seam ends are 12 mm apart, closing the seam shears the whole
+piece, and the shorter side reads +1.97 % even with the ease on.
+
+No pattern in the repository carries cap ease (all measured: `bluse2_v26`
+41.5308 / 41.5310 cm, `bluse1_v25` 41.6004 / 41.6002, `bluse3_v2` 40.0186 /
+40.0187, `bolero_v37` 40.9273 / 40.9463), and the switch is off by default, so
+`bluse2_stehend` is unchanged at +0.20 mm and 769 of 770 seam pairs.
+
 The plunge opening at the neck is not part of the table: the blouse's neckline
 measures 37.6 cm while the body's neck opening is 32.1 cm, so 5.5 cm cannot close
 there whatever the solver does. The opening widens from 35.4 mm flat to 142.7 mm
@@ -999,7 +1043,7 @@ per stage:
 | Stage | needed for fabric | Status |
 |---|---|---|
 | 1 Pattern reading | grainline per piece: read Seamly2D `<grainline>` (position, rotation), otherwise a fixed piece axis | **done** (`fadenlauf.rs`, #10): visible grainlines only, formula values in the pattern unit, anchored ones normalised into the seam line's box. Carried into the mesh since #88: `Teilnetz::fadenlauf` in mm in the net's own frame, and `klon3d netz --svg` draws the axis with the arrow tips; an unreadable grainline is a message in `Musternetz::fehler`, never a lost piece. `Fadenlauf::richtung()` gives the axis as a 2D unit vector |
-| 3 Mesh | carry the grainline into the mesh (direction per triangle); sewn seam with the seam allowance turned inward instead of an overlap seam; glue zone = fusible interfacing | grainline **done**, seam allowance and glue zone open: `Szene::faser` carries one unit vector per triangle (`klon3d-sim/src/faser.rs`, #106), taken from the piece's axis through the same triangle map the solver uses, so it follows a nonlinear placement - across the piece, not at one point. A piece without a readable grainline takes pattern x and is counted in `Szene::faser_ersatz`; a triangle the placement collapses takes its longest edge and is counted in `Szene::faser_entartet`. Carried data only, nothing reads it while the material stays isotropic |
+| 3 Mesh | carry the grainline into the mesh (direction per triangle); sewn seam with the seam allowance turned inward instead of an overlap seam; glue zone = fusible interfacing | grainline **done**, seam allowance and glue zone open: `Szene::faser` carries one unit vector per triangle (`klon3d-sim/src/faser.rs`, #106), taken from the piece's axis through the same triangle map the solver uses, so it follows a nonlinear placement - across the piece, not at one point. A piece without a readable grainline takes pattern x and is counted in `Szene::faser_ersatz`; a triangle the placement collapses takes its longest edge and is counted in `Szene::faser_entartet`. Carried data only, nothing reads it while the material stays isotropic. Unequal seam sides since #109: the mesh pairs them at the same arc fraction (it always did), and `Simparameter::einhalteweite` makes the longer side give the surplus — see "Ease in the solver" above |
 | 4 Solver | **anisotropic material**: warp, weft and shear separate; for this a **triangle continuum** instead of edge springs (those have ν = 1/3 and no independent shear); noticeable, direction-dependent bending; **self-collision** and layers, because fabric falls into folds | open; edge springs isotropic; self-collision since finding 116 (switch, CPU), layers missing. The direction per triangle is there since #106 (`Szene::faser`), so the material has something to be anisotropic about |
 | Material | `.zfab` reader in Rust, values from CLO's fabric library (ADR-015), no measurements of our own | **read** (`klon3d-pattern/src/zfab.rs`, #83): one reader for both containers, the CLO-fabric mapping lives in `klon3d-pipeline`; `anziehen --material` (#85) and `roehre --material` (#87) pick a `.zfab` by path or by a stem from `assets/stoffe`, through one shared resolution |
 | 5 Inspection output | drape and folds; comparison against CLO with the same fabric, draping and fitted reported separately (already specified) | open |
