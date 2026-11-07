@@ -26,6 +26,7 @@ pub mod anordnung_clo;
 pub mod anordnung_netz;
 pub mod anpassen;
 pub mod bogenmasse;
+pub mod dualquat;
 pub mod formung;
 pub mod kette;
 pub mod kette_referenz;

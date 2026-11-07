@@ -139,7 +139,7 @@ fn hilfe() {
       Groesse als OBJ
 
   klon3d skelett [--out <koerper.obj>] [--drehung <grad>] [--ordner <makehuman>]
-                 [--hoehe <cm>]
+                 [--hoehe <cm>] [--dual]
       Stufe 7: Skelett, Hautgewichte und Verformung auf dem freien MakeHuman-
       Koerper (CC0). Liest Gelenke aus denselben joint-*-Gruppen, rechnet die
       Gewichte aus dem Abstand zu den Knochenstrecken (vier Einfluesse, je
@@ -147,7 +147,8 @@ fn hilfe() {
       ferne Kanten (ueber 120 mm von der Schulter) duerfen sich hoechstens
       verdoppeln und um hoechstens 10 mm wachsen, die Binde-Pose muss den
       Koerper unveraendert lassen; --drehung hebt um einen anderen Winkel,
-      --out schreibt den verformten Koerper als OBJ (mm)
+      --out schreibt den verformten Koerper als OBJ (mm), --dual mischt die
+      Haut als duale Quaternionen statt linear (Standard)
 
   klon3d anziehen <muster.sm2d> [--masse <datei.smis>] [--naehte <datei>]
                   [--lage <datei>] [--naehen <m/s>] [--naehbilder <n>]
@@ -1138,14 +1139,20 @@ fn befehl_koerper(args: &[String]) -> ExitCode {
 fn befehl_skelett(args: &[String]) -> ExitCode {
     use klon3d_koerper::skelett;
 
-    const AUFRUF: &str = "Aufruf: klon3d skelett [--out <koerper.obj>] [--drehung <grad>] [--ordner <makehuman>] [--hoehe <cm>]";
+    const AUFRUF: &str = "Aufruf: klon3d skelett [--out <koerper.obj>] [--drehung <grad>] [--ordner <makehuman>] [--hoehe <cm>] [--dual]";
     let mut aus = None;
     let mut ordner = klon3d_koerper::koerper_quelle::ordner();
     let mut drehung = 90.0f64;
     let mut hoehe_cm = 160.0f64;
+    let mut verformung = skelett::Verformung::Linear;
     let mut i = 0;
     while i < args.len() {
         match args[i].as_str() {
+            // Haengt kein Wert dran: die Mischung der Haut.
+            "--dual" => {
+                verformung = skelett::Verformung::Dual;
+                i += 1;
+            }
             o @ ("--out" | "--ordner" | "--drehung" | "--hoehe") => {
                 let Some(w) = args.get(i + 1) else {
                     eprintln!("{o} ohne Wert\n{AUFRUF}");
@@ -1223,14 +1230,22 @@ fn befehl_skelett(args: &[String]) -> ExitCode {
 
     let mut s = skelett.clone();
     s.hebe_arme(drehung);
-    let Some(neu) = s.verforme(&netz.punkte) else {
-        eprintln!("Verformung nicht moeglich (Binde-Matrix nicht starr)");
+    let Some(neu) = s.verforme_mit(verformung, &netz.punkte) else {
+        eprintln!("Verformung nicht moeglich (Binde-Matrix nicht starr, oder gegenlaeufige Drehungen)");
         return ExitCode::FAILURE;
     };
-    let Some(ab) = skelett.abnahme(&netz.punkte, &netz.dreiecke, drehung) else {
+    let Some(ab) = skelett.abnahme_mit(verformung, &netz.punkte, &netz.dreiecke, drehung) else {
         eprintln!("Abnahme nicht messbar");
         return ExitCode::FAILURE;
     };
+    println!(
+        "  Hautmischung {verformung:?}{}",
+        if verformung == skelett::Verformung::Dual {
+            " (duale Quaternionen)"
+        } else {
+            " (Standard, lineare Mischung)"
+        }
+    );
     println!("  Armheben {drehung:.0} Grad:");
     println!(
         "    ferne Kanten {}: ueber 2x {}, ueber 10 mm {}, groesstes Verhaeltnis {:.3}",
