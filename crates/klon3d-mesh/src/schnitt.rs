@@ -22,12 +22,14 @@
 //!   and `klon3d umriss` (#82) all pass `Eigen`, so a free edge (`after = 0`)
 //!   stays free instead of gaining an allowance. A fourth rule here would
 //!   silently disagree with the exported contour.
-//! - **The deduplication is repeated, not shared.** `Saumkontur::punkte` lists
+//! - **The deduplication is shared, from here.** `Saumkontur::punkte` lists
 //!   both ends of every segment, so a corner that the arithmetic leaves split
 //!   appears twice, and a closed ring must not repeat its first point at the
-//!   end. `klon3d umriss` repeats the same rule from `klon3d_app::muster`, for
-//!   the same reason: the mesh must not depend on the app, and the pattern crate
-//!   must not depend on the mesh.
+//!   end. [`ringindizes`] is that rule, and [`crate::zugabe`] uses it too: the
+//!   band's outer edge must be this ring, point for point, not a second
+//!   deduplication that could drop a different point. `klon3d umriss` still
+//!   repeats the rule from `klon3d_app::muster`: the mesh must not depend on the
+//!   app, and the pattern crate must not depend on the mesh.
 //!
 //! ## Units
 //!
@@ -80,13 +82,22 @@ pub fn hat_zugabe(rand: &Teilrand) -> bool {
 /// One ring out of [`Saumkontur::punkte`]: drops repeated points and the
 /// closing point. Same rule as `klon3d umriss`, which repeats it from the app.
 fn bereinigt(punkte: &[Pt]) -> Vec<Pt> {
-    let mut out: Vec<Pt> = Vec::with_capacity(punkte.len());
-    for &p in punkte {
-        if out.last().is_none_or(|q| q.dist(p) > EPS) {
-            out.push(p);
+    ringindizes(punkte).into_iter().map(|i| punkte[i]).collect()
+}
+
+/// Which points of [`Saumkontur::punkte`] survive [`bereinigt`], in order.
+///
+/// Exposed because [`crate::zugabe`] pairs the cutting line with the seam line,
+/// point for point: it has to drop the same points the ring drops, or the
+/// band's outer edge would stop being this ring. One rule, two callers.
+pub(crate) fn ringindizes(punkte: &[Pt]) -> Vec<usize> {
+    let mut out: Vec<usize> = Vec::with_capacity(punkte.len());
+    for (i, p) in punkte.iter().enumerate() {
+        if out.last().is_none_or(|&j| punkte[j].dist(*p) > EPS) {
+            out.push(i);
         }
     }
-    while out.len() > 1 && out[0].dist(*out.last().unwrap()) <= EPS {
+    while out.len() > 1 && punkte[out[0]].dist(punkte[*out.last().unwrap()]) <= EPS {
         out.pop();
     }
     out

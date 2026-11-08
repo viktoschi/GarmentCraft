@@ -134,6 +134,8 @@ pub(crate) struct Teilgeo {
     /// Schnittlinie in mm, schon im Bezugssystem der Kontur; leer, wenn das
     /// Teil keine Zugabe hat ([`crate::schnitt`]).
     pub schnitt: Vec<[f64; 2]>,
+    /// Zugabestreifen in mm, noch ohne Anker ([`crate::zugabe`]).
+    pub zugabe: crate::zugabe::Streifen,
     /// Fadenlauf in mm, schon im Bezugssystem der Kontur.
     pub fadenlauf: Option<Fadenlauf>,
 }
@@ -175,6 +177,7 @@ impl Teilgeo {
             knoten,
             kontur,
             schnitt: crate::schnitt::aus_teilrand(r),
+            zugabe: crate::zugabe::aus_teilrand(r)?,
             fadenlauf,
         })
     }
@@ -634,6 +637,7 @@ mod tests {
             knoten: vec!["A".into(), "B".into(), "C".into()],
             kontur: Vec::new(),
             schnitt: Vec::new(),
+            zugabe: Default::default(),
             fadenlauf: None,
         }];
         let p = Parameter::default();

@@ -49,6 +49,58 @@ fn bluse_mit_nahtliste_und_ausgabe() {
     assert_eq!(svg.matches(r#"<g id="naht-"#).count(), 24);
 }
 
+/// Der Zugabestreifen steht je Teil im Bericht: dieselbe Länge wie die
+/// `Schnitt`-Spalte, und `-` ohne Zugabe statt einer `0.0`, an der man „kein
+/// Streifen" nicht von „Streifen der Breite null" unterscheiden könnte.
+#[test]
+fn zugabestreifen_je_teil() {
+    let o = klon3d(&[muster("bluse2_v26.sm2d").to_str().unwrap(), "--ohne-naehte"]);
+    let t = text(&o);
+    assert!(o.status.success(), "{t}");
+    assert!(t.contains("Zugabe") && t.contains("Band"), "{t}");
+    let mut mit = 0usize;
+    let mut ohne = 0usize;
+    for z in t.lines() {
+        // Zeilen mit Teilnamen enden auf zwei Zahlen oder zwei Strichen; die
+        // Erklärungszeilen darunter fallen damit heraus.
+        let Some(rest) = z.strip_prefix("  ") else { continue };
+        let felder: Vec<&str> = rest.split_whitespace().collect();
+        if felder.len() < 4 {
+            continue;
+        }
+        let Some(band) = felder.last() else { continue };
+        let Some(zugabe) = felder.iter().rev().nth(1) else { continue };
+        let zahl_oder_strich = |s: &str| s == "-" || s.parse::<f64>().is_ok();
+        if !zahl_oder_strich(band) || !zahl_oder_strich(zugabe) {
+            continue;
+        }
+        if *band == "-" {
+            assert_eq!(*zugabe, "-", "{z}: Band ohne Zugabe-Länge");
+            ohne += 1;
+            continue;
+        }
+        let band: usize = band.parse().unwrap_or_else(|_| panic!("{z}: Bandzahl"));
+        assert!(band > 0, "{z}: Band ohne Dreiecke");
+        // Dieselbe Länge wie `Schnitt`, auf die 0.1 mm, auf die beide gedruckt
+        // werden: eine Konsistenzprüfung, kein zweiter Messweg - Band und Ring
+        // teilen sich die Deduplizierung. Der unabhängige Beleg steht in
+        // `klon3d-mesh/tests/zugabe.rs` gegen die Werte von `klon3d umriss`,
+        // das seine eigene Kopie der Regel hat.
+        let schnitt: f64 = felder
+            .iter()
+            .rev()
+            .nth(2)
+            .unwrap_or_else(|| panic!("{z}: keine Schnittspalte"))
+            .parse()
+            .unwrap_or_else(|_| panic!("{z}: Schnittzahl"));
+        let zugabe: f64 = zugabe.parse().unwrap_or_else(|_| panic!("{z}: Zugabelänge"));
+        assert!((schnitt - zugabe).abs() <= 0.1, "{z}: Schnitt {schnitt} mm, Zugabe {zugabe} mm");
+        mit += 1;
+    }
+    assert_eq!(mit, 12, "Teile mit Streifen");
+    assert_eq!(ohne, 10, "Teile ohne Streifen");
+}
+
 #[test]
 fn ohne_naehte_nur_die_netze() {
     let o = klon3d(&[muster("bluse3_v2.sm2d").to_str().unwrap(), "--ohne-naehte", "--kante", "20"]);

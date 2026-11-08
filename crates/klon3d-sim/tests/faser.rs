@@ -35,6 +35,7 @@ fn netz(punkte: Vec<[f64; 2]>, dreiecke: Vec<[u32; 3]>, fadenlauf: Option<Fadenl
             kanten: Vec::new(),
             kontur: Vec::new(),
             schnitt: Vec::new(),
+            zugabe: Default::default(),
             fadenlauf,
             aufgegeben: 0,
         }],
