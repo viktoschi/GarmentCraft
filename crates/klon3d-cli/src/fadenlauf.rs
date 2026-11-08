@@ -67,6 +67,7 @@ mod tests {
             punktknoten: Vec::new(),
             kanten: Vec::new(),
             kontur: Vec::new(),
+            schnitt: Vec::new(),
             fadenlauf,
             aufgegeben: 0,
         }

@@ -131,6 +131,9 @@ pub(crate) struct Teilgeo {
     /// Punktknoten (dann ist der ganze Umriss eine Kante).
     pub knoten: Vec<String>,
     pub kontur: Vec<[f64; 2]>,
+    /// Schnittlinie in mm, schon im Bezugssystem der Kontur; leer, wenn das
+    /// Teil keine Zugabe hat ([`crate::schnitt`]).
+    pub schnitt: Vec<[f64; 2]>,
     /// Fadenlauf in mm, schon im Bezugssystem der Kontur.
     pub fadenlauf: Option<Fadenlauf>,
 }
@@ -166,7 +169,14 @@ impl Teilgeo {
             p2: f(&g.p2),
             pfeile: g.pfeile,
         });
-        Ok(Teilgeo { teil: r.teil.clone(), kanten, knoten, kontur, fadenlauf })
+        Ok(Teilgeo {
+            teil: r.teil.clone(),
+            kanten,
+            knoten,
+            kontur,
+            schnitt: crate::schnitt::aus_teilrand(r),
+            fadenlauf,
+        })
     }
 
     fn knotenname(&self, i: usize) -> String {
@@ -623,6 +633,7 @@ mod tests {
             kanten: vec![Kantenzug::neu(bogen), Kantenzug::neu(vec![[0.0, 20.0], [0.0, 0.0]]), Kantenzug::neu(vec![[0.0, 0.0], [20.0, 0.0]])],
             knoten: vec!["A".into(), "B".into(), "C".into()],
             kontur: Vec::new(),
+            schnitt: Vec::new(),
             fadenlauf: None,
         }];
         let p = Parameter::default();
