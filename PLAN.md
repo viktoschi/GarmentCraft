@@ -949,7 +949,7 @@ What `bluse2_stehend` measures on the shaped body (2026-11-01, stage 4d):
 | Fault | Metric | Measured | Floor | Shown |
 |---|---|---|---|---|
 | 1 Plunge edges slide | opening at the bust, against the 130.0 mm of the flat pattern | 130.0 → 175.3 mm (+45.3) | +10 mm | **yes** |
-| 2 Sleeve cap stands off | air under the cap over the shoulder, area-weighted median | 0.7 mm (0.5 mm on a rerun 2026-11-07; 0.9 mm on a copy with 15 mm of cap ease, #111) | 10 mm | **no**, see below |
+| 2 Sleeve cap stands off | air under the cap over the shoulder, area-weighted median | 0.7 mm (0.5 mm on a rerun 2026-11-07; 0.9 mm on a copy with 15 mm of cap ease, #111; 1.3 mm on a copy with 40 mm, #115) | 10 mm | **no**, see below |
 | 3 Tension at the shoulder blade | strain there against the back pieces as a whole | +11.08 % against +5.84 % (+5.24 pp) | 2 pp | **yes** |
 | 4 Sleeve too tight | strain around the arm at armpit height | +4.94 % | 2 % | **yes** |
 | 5 Collar stands open | air under its free upper edge at the two front ends | 31.2 mm (ends 143.0 mm apart) | 10 mm | **yes** |
@@ -1034,6 +1034,75 @@ because the armhole is cut 5 mm long per side; a cap that stands off needs both 
 ease along the cap **and** an armhole that does not stretch away under it. Both
 facts now have a number (`aermelkugel.rs`, `bluse2_stehend_einhalte.rs`), so the
 next attempt has a criterion instead of another guess.
+
+### The dose does not change it either (#115)
+
+The obvious next lever was the armhole: take away its slack by cutting it
+shorter. **That cannot work in this pattern set.** The cap reads the armhole
+length - its four `cutSplinePath` intersections lie on `Line_AL0_ALB` /
+`Line_AL0_ALF` - so every millimetre off the armhole comes off the cap too.
+Measured on a throw-away copy of the #111 pattern with `#ArmholeDepth` 0.5 cm
+higher (the depth sits in `#ArmStraightB` **and** `#ArmStraightF`, so both halves
+move):
+
+| copy | V13 cap | V13 armhole | difference |
+|---|---|---|---|
+| #111 (`#CapEase = 0.75`) | 43.0304 cm | 41.5310 cm | **+1.5000 cm** |
+| #111 + armhole 10.0 mm shorter | 42.0311 cm | 40.5310 cm | **+1.5001 cm** |
+
+Both sides lost 10.0 mm, the ease did not move, and the armhole ended at 40.5 cm
+around a 41 cm body - that pulls the cap **down**, not up.
+
+So the only lever left is the dose itself, and it was measured:
+`bluse2_v26_kappe40.sm2d` is a copy of the #111 pattern with `#CapEase = 2`
+instead of `0.75` - **40.0 mm** of ease per cap seam, one formula and no moved
+node id, so the #111 seam list and placement apply unchanged
+(`tools/kappe_dosis.py`, `kappe_dosis.rs`). `tests/bluse2_stehend_dosis.rs`
+dresses both copies on the same body with the same settings, so the two points
+sit in one table and cannot drift apart (4 runs, 1714 s):
+
+| ease per cap seam | switch | cap side sewn | armhole side sewn | air under the cap, median | widest gap |
+|---|---|---|---|---|---|
+| 15 mm (#111) | off | +8.16 % | +18.41 % | 1.0 mm | 16.2 mm |
+| 15 mm (#111) | on | +6.74 % | +11.55 % | 0.9 mm | 20.7 mm |
+| **40 mm** | off | +7.19 % | +24.90 % | 2.6 mm | 17.0 mm |
+| **40 mm** | on | +4.17 % | +22.87 % | **1.3 mm** | 10.2 mm |
+
+Four times the ease gives 0.4 mm more air in the median (0.9 → 1.3 mm) and does
+not even reach the 2.6 mm the same copy shows with the switch off. The widest
+single gap, 17.0 mm, *shrinks* to 10.2 mm when the ease is emulated: the surplus
+is being spread along the seam rather than lifted. The numbers name the reason
+without guessing:
+
+- **The armhole takes the growth, not the cap.** With 25 mm more ease the
+  armhole side's stretch rises from 18.41 % to 24.90 % (+6.49 pp) while the cap
+  side's falls slightly (8.16 % to 7.19 %, −0.97 pp) - the more ease the copy
+  carries, the *less* its cap side is strained. The armhole is 41.5 cm around
+  a 41 cm body, and latex stretches rather than gathering, so the extra length
+  runs down the arm instead of arching over the shoulder.
+- **The ease switch moves the cap side more than before and still misses.** It
+  takes 3.02 pp off the cap side (at 15 mm: 1.41 pp) and 2.03 pp off the
+  armhole, i.e. it does reach the cap - the mechanism works, the geometry does
+  not give it anything to lift.
+- **The run is sound.** Placed but before any solver step the cap reads 454.9 mm
+  against 455.3 mm of pattern and the armhole 415.2 mm against 415.3 mm
+  (+0.08 % / +0.02 %), so the length measurement is not the error; 99.7 % of
+  seam pairs are within 10 mm, the lowest point is +0.20 mm, the scene is at rest
+  (0.0002 m/s).
+
+The slope is therefore **+0.4 mm of air for 25 mm of extra ease**, i.e. about
++0.016 mm per millimetre. Extrapolated linearly - which a 2 % strain range does
+not really justify - reaching the 10 mm floor would take roughly 540 mm of ease
+on top of the 40, which no sleeve cap carries. **Fault 2 stays "not shown" with
+40 mm as well**, and the fault list's floor is not reached by adding ease to a
+pattern whose armhole is longer than the body. The honest statement is the one
+#111 already made, now with a dose curve behind it: this pattern cannot show
+fault 2, and the reason is the armhole's 5.3 mm of slack over a 41 cm body, not
+the solver.
+
+`#CapEase` beyond `1.0` also breaks the seam pairing of the seam list (from
+`1.25` on, 10 nodes per cap seam find no counterpart), so even if a larger dose
+were wanted, the copy would need a rewritten seam list first.
 
 ### Ease in the solver (#109)
 

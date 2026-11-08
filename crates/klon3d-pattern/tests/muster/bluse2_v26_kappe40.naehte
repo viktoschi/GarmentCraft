@@ -1,0 +1,46 @@
+# Seam list of bluse2_v26_kappe40.sm2d - the test copy with 40.0 mm of cap ease
+# (#115). Content below is v26's seam list unchanged: the copy keeps every node
+# id, so the same seam definitions apply.
+# Seam list for bluse2_v26.sm2d (test blouse v26, stage 4d)
+#
+# V01-V16: `klon3d naehte --vorschlag` (from equal lengths, notches, shared
+# points and the position in the drawing), reviewed.
+# V17-V19: written by hand - the proposal leaves 18 edges without a partner,
+# and the plunge edge, the neckline and the collar have no seam at all. Without
+# them the trim and both collar layers are not even placed on the body, and
+# faults 1 (plunge edge slides aside) and 5 (collar stands open) cannot show.
+#   V17  collar (inner) on the neckline, as in bluse3_v2 N13
+#   V18  collar (outer) on the collar (inner) at their common free upper edge -
+#        the two layers are one collar, joined along the fold, not a seam
+#        along the neckline (that would cover the neckline edge twice)
+#   V19  plunge trim on the plunge edge of both front pieces (their lengths
+#        agree to 0.0000 cm: 19.6927 + 15.0342 cm per side)
+# Left out on purpose, with a reason: the decorative discs (Donut plunge tip
+# 3 cm, six 2 cm discs at hem/armhole/frog, two half discs at the collar ends)
+# are ornaments that are glued on and carry no load; they would only add
+# collision partners. They are not sewn, so `klon3d lage` leaves them off.
+#
+# Kennung | Bezeichnung | Seite A | Seite B
+# Seite = Abschnitt + Abschnitt ... (in Naehrichtung); Abschnitt = Teil: VON BIS v|r
+# v = forward in the piece's knot order, r = backward
+
+V01 | Rueckenteil Mitte Links / Rueckenteil Mitte Rechts (42.9 cm) | Bluse 2 - Rueckenteil Mitte Links: RM1 RNP v | Bluse 2 - Rueckenteil Mitte Rechts: RM1 RNP r
+V02 | Vorderteil Mitte Plunge Links / Vorderteil Mitte Plunge Rechts (9.6 cm) | Bluse 2 - Vorderteil Mitte Plunge Links: VM1 VPB v | Bluse 2 - Vorderteil Mitte Plunge Rechts: VM1 VPB r
+V03 | Vorderteil Mitte Plunge Rechts / Vorderteil Seite Rechts (45.9 cm) | Bluse 2 - Vorderteil Mitte Plunge Rechts: VJM_R VT_R v | Bluse 2 - Vorderteil Seite Rechts: VJS_R VT_R r
+V04 | Vorderteil Mitte Plunge Links / Vorderteil Seite Links (45.9 cm) | Bluse 2 - Vorderteil Mitte Plunge Links: VT_L VJM_L v | Bluse 2 - Vorderteil Seite Links: VT_L VJS_L r
+V05 | Rueckenteil Mitte Links / Rueckenteil Seite Links (43.5 cm) | Bluse 2 - Rueckenteil Mitte Links: RT_L RJM_L v | Bluse 2 - Rueckenteil Seite Links: RT_L RJS_L r
+V06 | Rueckenteil Mitte Rechts / Rueckenteil Seite Rechts (43.5 cm) | Bluse 2 - Rueckenteil Mitte Rechts: RJM_R RT_R v | Bluse 2 - Rueckenteil Seite Rechts: RJS_R RT_R r
+V07 | Rueckenteil Seite Rechts / Vorderteil Seite Rechts (23.4 cm) | Bluse 2 - Rueckenteil Seite Rechts: RH_R RA_R v | Bluse 2 - Vorderteil Seite Rechts: VH_R VA_R v
+V08 | Rueckenteil Seite Links / Vorderteil Seite Links (23.4 cm) | Bluse 2 - Rueckenteil Seite Links: RA_L RH_L v | Bluse 2 - Vorderteil Seite Links: VA_L VH_L v
+V09 | Rueckenteil Mitte Rechts / Vorderteil Mitte Plunge Rechts (4.0 cm) | Bluse 2 - Rueckenteil Mitte Rechts: RT_R RS_R v | Bluse 2 - Vorderteil Mitte Plunge Rechts: VT_R VN_R v
+V10 | Rueckenteil Mitte Links / Vorderteil Mitte Plunge Links (4.0 cm) | Bluse 2 - Rueckenteil Mitte Links: RS_L RT_L v | Bluse 2 - Vorderteil Mitte Plunge Links: VN_L VT_L v
+V11 | Rueckenteil Seite Links / Vorderteil Seite Links (7.0 cm) | Bluse 2 - Rueckenteil Seite Links: RT_L RSP_L v | Bluse 2 - Vorderteil Seite Links: VT_L VSP_L v
+V12 | Rueckenteil Seite Rechts / Vorderteil Seite Rechts (7.0 cm) | Bluse 2 - Rueckenteil Seite Rechts: RSP_R RT_R v | Bluse 2 - Vorderteil Seite Rechts: VSP_R VT_R v
+V13 | Aermel Kurz Links / Rueckenteil Seite Links (41.5 cm) | Bluse 2 - Aermel Kurz Links: AB1K AB2K v | Bluse 2 - Rueckenteil Seite Links: RA_L RSP_L r + Bluse 2 - Vorderteil Seite Links: VSP_L VA_L v
+V14 | Aermel Kurz Rechts / Vorderteil Seite Rechts (41.5 cm) | Bluse 2 - Aermel Kurz Rechts: AB1RK AB2RK v | Bluse 2 - Vorderteil Seite Rechts: VA_R VSP_R v + Bluse 2 - Rueckenteil Seite Rechts: RSP_R RA_R r
+V15 | Aermel Kurz Links / Aermel Kurz Links (8.6 cm) | Bluse 2 - Aermel Kurz Links: AH1 AB1K v | Bluse 2 - Aermel Kurz Links: AH2 AB2K r
+V16 | Aermel Kurz Rechts / Aermel Kurz Rechts (8.6 cm) | Bluse 2 - Aermel Kurz Rechts: AH1R AB1RK v | Bluse 2 - Aermel Kurz Rechts: AH2R AB2RK r
+
+V17 | Halsnaht: Halsloch (rechts vorn -> hinten -> links vorn) / Stehkragen innen (37.6 cm) | Bluse 2 - Vorderteil Mitte Plunge Rechts: VK0_R VN_R r + Bluse 2 - Rueckenteil Mitte Rechts: RS_R RNP v + Bluse 2 - Rueckenteil Mitte Links: RNP RS_L v + Bluse 2 - Vorderteil Mitte Plunge Links: VN_L VK0_L r | Bluse 2 - Stehkragen Innen (Plunge): KUR0 KUL0 v
+V18 | Kragen innen / Kragen aussen an der Oberkante (32.8 cm) | Bluse 2 - Stehkragen Innen (Plunge): KOL0 KOR0 v | Bluse 2 - Stehkragen Aussen (Plunge): KOL0 KOR0 v
+V19 | Trim auf der Plunge-Kante (69.5 cm) | Bluse 2 - Vorderteil Mitte Plunge Rechts: VK0_R VPB v + Bluse 2 - Vorderteil Mitte Plunge Links: VPB VK0_L v | Bluse 2 - Trim Plunge-Kante: VK0_R VK0_L v

@@ -1,0 +1,34 @@
+# Placement of bluse2_v26_kappe40.sm2d - the test copy with 40.0 mm of cap ease
+# (#115). Content below is v26's placement unchanged: the copy keeps every node
+# id, so the same pieces find the same zones, anchors and heights.
+# Placement of bluse2_v26.sm2d (test blouse v26, stage 4d)
+#
+# Part | zone | anchor point | circumference | height | options
+# Circumference on torso and neck in degrees from the top: 0 front, 90 left, 180 back, 270 right
+# (wearer's sides), with "cm" as arc length; on the arm: 0 top, 90 front. Height in cm, from the
+# side neck point. Pattern y runs downwards, the placement turns it upright.
+#
+# V01-V16 from `klon3d lage` (the 16 sewn pieces of the proposal). Added by hand, because the
+# proposal cannot place them: the plunge trim and the two collar layers. The 9 decorative discs
+# are not sewn on purpose (see the seam list) and are left off.
+#
+# Front pieces hang on VN (side neck point, 8.2 cm beside the centre front; VN lies at the side
+# neck point of the body). VK0 is 7.30 cm lower and 1.77 cm beside the centre front - that is the
+# anchor of the trim. The collar hangs on KHM (centre of the band, back centre) as in bluse3_v2;
+# the outer layer starts 6 mm further out so the two layers do not begin in the same place.
+
+abstand 2
+
+Bluse 2 - Rueckenteil Mitte Links | rumpf | RS_L | hinten -8,20cm | hals seitlich +0,00 | gespiegelt
+Bluse 2 - Rueckenteil Mitte Rechts | rumpf | RS_L | hinten -8,20cm | hals seitlich +0,00 | gespiegelt
+Bluse 2 - Rueckenteil Seite Links | rumpf | RS_L | hinten -8,20cm | hals seitlich +0,00 | gespiegelt abstand 0,5
+Bluse 2 - Rueckenteil Seite Rechts | rumpf | RS_L | hinten -8,20cm | hals seitlich +0,00 | gespiegelt abstand 0,5
+Bluse 2 - Vorderteil Mitte Plunge Links | rumpf | VN_L | vorn +8,20cm | hals seitlich +0,00 |
+Bluse 2 - Vorderteil Mitte Plunge Rechts | rumpf | VN_L | vorn +8,20cm | hals seitlich +0,00 |
+Bluse 2 - Vorderteil Seite Links | rumpf | VN_L | vorn +8,20cm | hals seitlich +0,00 | abstand 0,5
+Bluse 2 - Vorderteil Seite Rechts | rumpf | VN_L | vorn +8,20cm | hals seitlich +0,00 | abstand 0,5
+Bluse 2 - Trim Plunge-Kante | rumpf | VK0_L | vorn +1,77cm | hals seitlich -7,30 | abstand 0,6
+Bluse 2 - Aermel Kurz Links | arm links | B1_AM0 | oben -0,00cm | -0,00 | gespiegelt abstand 0,5
+Bluse 2 - Aermel Kurz Rechts | arm rechts | B1_AM0R | oben +0,00cm | -0,00 | gespiegelt abstand 0,5
+Bluse 2 - Stehkragen Innen (Plunge) | hals | KHM | hinten +0,00cm | hals seitlich -2,24 | abstand 3
+Bluse 2 - Stehkragen Aussen (Plunge) | hals | KHM | hinten +0,00cm | hals seitlich -2,24 | abstand 3,6

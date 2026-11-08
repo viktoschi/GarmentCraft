@@ -47,6 +47,17 @@
 //! reading the 0.7 mm as a solver failure. A cap that stands off needs both:
 //! ease along the cap **and** an armhole that does not stretch away under it.
 //!
+//! Task #115 took the two remaining ways out and closed them. **A shorter
+//! armhole does not work:** the cap reads the armhole length through
+//! `cutSplinePath`, so cutting it 10.0 mm shorter takes 10.0 mm off the cap as
+//! well and leaves the ease at +1.500 cm. **A larger dose does not work either:**
+//! `bluse2_v26_kappe40.sm2d` carries 40.0 mm of ease per cap seam, four times
+//! #111's, and the cap still lies on the shoulder - 1.3 mm of air in the median
+//! against the 10 mm floor, with the armhole side's stretch rising from 18.41 %
+//! to 24.90 % while the cap side's falls (8.16 % to 7.19 %). That is
+//! `bluse2_stehend_dosis.rs`; the reason is the armhole's 5.3 mm of slack over a
+//! 41 cm body, not the solver.
+//!
 //! Needs the reference body; without it the test prints `übersprungen` and
 //! returns. Release only, like the other placement tests.
 
