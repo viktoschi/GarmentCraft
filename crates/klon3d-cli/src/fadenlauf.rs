@@ -68,6 +68,7 @@ mod tests {
             kanten: Vec::new(),
             kontur: Vec::new(),
             schnitt: Vec::new(),
+            zugabe: Default::default(),
             fadenlauf,
             aufgegeben: 0,
         }

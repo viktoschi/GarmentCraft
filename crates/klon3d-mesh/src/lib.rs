@@ -32,6 +32,7 @@ mod rand;
 pub mod ausgabe;
 pub mod pruefung;
 pub mod schnitt;
+pub mod zugabe;
 
 use std::collections::BTreeSet;
 
@@ -111,6 +112,15 @@ pub struct Teilnetz {
     /// Linie im DXF-Export und der Zugabekontur der 2D-Ansicht. Nur Daten: kein
     /// Punkt, kein Dreieck und kein Nahtpaar hängt daran.
     pub schnitt: Vec<[f64; 2]>,
+    /// Der Zugabestreifen des Teils: das Band zwischen Nahtlinie und
+    /// Schnittlinie als Dreiecke, in mm, mit dem Randpunkt, an dem jeder
+    /// Außenpunkt hängt ([`zugabe::Streifen`]).
+    ///
+    /// Leer, wenn das Teil keine Zugabe hat. Neue Daten: die Punkte, die
+    /// Dreiecke und die Nahtpaare des Netzes bleiben, wie sie sind - das Band
+    /// an den Rand zu schweißen und nach innen zu falten ist der nächste
+    /// Schritt.
+    pub zugabe: zugabe::Streifen,
     /// Der Fadenlauf des Teils, im selben Bezugssystem und in derselben
     /// Einheit wie [`Teilnetz::punkte`]; `None` ohne sichtbaren
     /// `<grainline>` (oder wenn er sich nicht auswerten ließ, siehe
@@ -318,6 +328,7 @@ pub fn vernetze(
         tr.glaetten(p.glaetten);
         let g = &plan.teile[ti];
         let punktknoten = g.knoten.iter().enumerate().map(|(k, name)| (name.clone(), ri.knoten(k))).collect();
+        let zugabe = zugabe::mit_ankern(&g.zugabe, &g.kanten, &ri.orte);
         teile.push(Teilnetz {
             teil: g.teil.clone(),
             dreiecke: tr.dreiecke(),
@@ -328,6 +339,7 @@ pub fn vernetze(
             kanten: g.kanten.clone(),
             kontur: g.kontur.clone(),
             schnitt: g.schnitt.clone(),
+            zugabe,
             fadenlauf: g.fadenlauf,
             aufgegeben: *aufgegeben,
         });

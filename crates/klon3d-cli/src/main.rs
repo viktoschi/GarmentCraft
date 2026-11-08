@@ -734,8 +734,8 @@ fn befehl_netz(args: &[String]) -> ExitCode {
 
     println!();
     println!(
-        "  {:<34} {:>6} {:>5} {:>6} {:>6} {:>11} {:>7} {:>7} {:>8} {:>9}",
-        "Teil", "Punkte", "Rand", "Dreie.", "min∠", "Kante Med/Max", "Sehne", "Länge", "Fläche", "Schnitt"
+        "  {:<34} {:>6} {:>5} {:>6} {:>6} {:>11} {:>7} {:>7} {:>8} {:>9} {:>9} {:>6}",
+        "Teil", "Punkte", "Rand", "Dreie.", "min∠", "Kante Med/Max", "Sehne", "Länge", "Fläche", "Schnitt", "Zugabe", "Band"
     );
     for (t, tn) in bericht.teile.iter().zip(&netz.teile) {
         let kurz = t.teil.rsplit(" - ").next().unwrap_or(&t.teil);
@@ -746,8 +746,18 @@ fn befehl_netz(args: &[String]) -> ExitCode {
         } else {
             format!("{:>9}", "-")
         };
+        // Das Band ebenso: Länge des Außenrands (mit den Strecken ohne Breite)
+        // und Zahl seiner Dreiecke.
+        let (zugabe, band) = if tn.zugabe.ist_leer() {
+            (format!("{:>9}", "-"), format!("{:>6}", "-"))
+        } else {
+            (
+                format!("{:>9.1}", tn.zugabe.aussenlaenge() + tn.zugabe.ohne_breite_mm),
+                format!("{:>6}", tn.zugabe.dreiecke.len()),
+            )
+        };
         println!(
-            "  {} {:>6} {:>5} {:>6} {:>5.1}° {:>5.1}/{:>5.1} {:>7.4} {:>7.4} {:>+7.3}% {}",
+            "  {} {:>6} {:>5} {:>6} {:>5.1}° {:>5.1}/{:>5.1} {:>7.4} {:>7.4} {:>+7.3}% {} {} {}",
             spalte(kurz, 34),
             t.punkte,
             t.randpunkte,
@@ -758,12 +768,17 @@ fn befehl_netz(args: &[String]) -> ExitCode {
             t.sehne_max,
             t.laenge_max,
             100.0 * (t.flaeche_netz - t.flaeche_kontur) / t.flaeche_kontur.max(1e-9),
-            schnitt
+            schnitt,
+            zugabe,
+            band
         );
     }
     println!("  Kante in mm; Sehne = größter Abstand Randkante–Netzrand, Länge = größte Längenabweichung");
     println!("  einer Randkante (mm); Fläche = Netz gegen Nahtlinie; Schnitt = Länge der Schnittlinie");
     println!("  (Nahtlinie + Zugabe, dieselbe Linie wie bei `klon3d umriss`), `-` ohne Zugabe");
+    println!("  Zugabe = Außenrand des Zugabestreifens (mm, mit den Strecken ohne Breite), dieselbe Länge");
+    println!("  wie `Schnitt`; Band = Dreiecke des Streifens. Beides sind neue Daten: Punkte, Dreiecke");
+    println!("  und Nahtpaare des Netzes hängen nicht daran");
     for f in &netz.fehler {
         println!("  nicht vernetzt: {f}");
     }
