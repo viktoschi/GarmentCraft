@@ -517,11 +517,8 @@ fn schweissen_aendert_die_flaeche_nicht() {
 ///    no fabric and no triangle (262 / 177 / 678 stretches).
 /// 2. **Miter**: the inner point is identical to its neighbour while the outer
 ///    points are up to 4.85 / 5.50 / 4.25 mm apart. Such a stretch has no
-///    length, so no triangle can be positive on it (1108 / 1095 / 237
-///    stretches). A miter makes the strip topologically several pieces -
-///    592 / 663 / 109 components across 12 / 16 / 5 pieces - which is why the
-///    "connected along its own rings" claim of the issue is dropped here as
-///    false.
+///    inner length, so its inner edge is not `(i, i+1)` but the shared vertex
+///    the two inner points now are (1108 / 1095 / 237 stretches).
 /// 3. **No width at one end**: the fabric ends inside the stretch, so at least
 ///    one of the two triangles degenerates (28 / 26 / 10 stretches; on 14 / 13 /
 ///    5 of them only the outer edge is missing, the inner one is there).
@@ -532,6 +529,12 @@ fn schweissen_aendert_die_flaeche_nicht() {
 /// split: a stretch that carries fabric at both ends and has real length is a
 /// band edge, on the inner side and on the outer side. A ring reassembled in
 /// the wrong order still sums to the right area, but it would stop here.
+///
+/// What a miter costs in connectivity is measured too, and it is small: over
+/// shared edges the band has 14 / 17 / 5 detached groups across 12 / 16 / 5
+/// pieces, so one group per piece except the three places where it pinches to
+/// zero width at a point - the two `Vorderteil Mitte Plunge` pieces of bluse2
+/// and `Band Mitte` of bluse3. Before the miter repair it was 1122 / 1108 / 242.
 #[test]
 fn band_topologie_bleibt_sauber() {
     for (muster, _) in MUSTER {
@@ -571,19 +574,20 @@ fn band_topologie_bleibt_sauber() {
             );
 
             let null = |i: usize| abstand(s.innen[i], s.aussen[i]) <= 1e-6;
+            // Seam-line points at the same place are one vertex of the band, so
+            // a stretch's inner edge - if it has one - connects the two
+            // representatives, and a stretch whose two inner points share a
+            // vertex has no inner edge by construction.
+            let v = s.vertreter();
             for i in 0..nr {
                 let j = (i + 1) % nr;
                 let (b0, b1) = (null(i), null(j));
-                let fase = abstand(s.innen[i], s.innen[j]) <= 1e-9;
-                let hat = |a: usize, b: usize| {
-                    let (x, y) = (a as u32, b as u32);
-                    kanten.contains_key(&(if x < y { (x, y) } else { (y, x) }))
+                let fase = v[i] == v[j];
+                let hat = |a: u32, b: u32| {
+                    kanten.contains_key(&(if a < b { (a, b) } else { (b, a) }))
                 };
-                let innen = hat(i, j);
-                // The outer edge belongs to the triangle whose third point is
-                // the far inner point; it is only built when that point has
-                // width.
-                let aussen = hat(nr + i, nr + j);
+                let innen = !fase && hat(v[i], v[j]);
+                let aussen = hat(nr as u32 + i as u32, nr as u32 + j as u32);
                 geprueft += 1;
 
                 if !innen || !aussen {
