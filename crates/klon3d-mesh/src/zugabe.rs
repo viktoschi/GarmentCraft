@@ -24,14 +24,41 @@
 //! deduplicates through its own copy of the rule - and the result against
 //! `Teilnetz::schnitt` for consistency.
 //!
+//! ## Welded to the piece's boundary points
+//!
+//! [`verschweisst`] makes every boundary point of the mesh a vertex of the band.
+//! The boundary points already lie on the band's seam-line ring (measured:
+//! 0.000000 mm on every piece of the three test patterns) but only a minority is
+//! one of its vertices - 23.1 % / 21.5 % / 7.8 % of them, per piece between
+//! 6.7 % and 32.7 %. The rest sit mid-segment, because the mesh boundary is much
+//! coarser than the contour. So the ring is split there: the
+//! boundary point becomes an inner vertex at its own coordinates, and its outer
+//! partner is read off the *outer* segment at the same fraction, which puts it
+//! on the cutting line by construction. Splitting a segment adds no area, so the
+//! band keeps its width; `tests/zugabe.rs` measures that per piece.
+//!
+//! The split has a price, and it is not hidden: the band's free inner edges are
+//! still the seam line, not the mesh boundary. Between two boundary points the
+//! contour keeps the vertices it drew - they are what makes the band wide where
+//! the boundary chord is not - so those free edges run through contour points
+//! and are *not* edges of the piece. Making them boundary edges would mean
+//! replacing the inner ring by the boundary polygon, which trades the seam line
+//! for its chord and moves the band's area by up to 21.8 mm² on the test
+//! patterns. That is the opposite of what the acceptance wants, so the spare
+//! vertices stay and `tests/zugabe.rs` counts both kinds of free inner edge.
+//!
+//! Boundary points on a stretch without fabric have no triangle to be a vertex
+//! of. They are inserted all the same, for one rule instead of two, and the test
+//! names and counts the ones no triangle can use.
+//!
 //! ## Nothing the solver reads changes
 //!
 //! The band is new data: no point, no triangle and no seam pair of
 //! [`crate::Teilnetz::punkte`], [`crate::Teilnetz::dreiecke`] or
-//! [`crate::Musternetz::naehte`] is added, moved or renumbered. Welding the band
-//! to the piece's boundary points and folding it inward are the next step; both
-//! need this strip first, and both change what the solver sees, so they do not
-//! belong in the same change as the strip.
+//! [`crate::Musternetz::naehte`] is added, moved or renumbered, and welding only
+//! touches the band's own rings. Folding it inward and giving the band a seam is
+//! the next step; that one changes what the solver sees, so it does not belong
+//! in the same change as the weld.
 //!
 //! ## Winding: the band is the same sheet, and the mesh wants it positive
 //!
@@ -50,7 +77,10 @@
 //! outer point therefore carries an anchor: the boundary point whose stretch of
 //! seam line it lies on. Several outer points may share an anchor; the anchors
 //! run non-decreasing along the ring, so a deformation of the piece carries the
-//! band with it instead of leaving it behind.
+//! band with it instead of leaving it behind. After [`verschweisst`] every
+//! boundary point is a ring point with itself as anchor, so the shared ones are
+//! the outer partners: one anchor per boundary point, several outer points and
+//! several cutting-line points on one boundary stretch.
 //!
 //! The lookup assumes that [`Streifen::bogen`] (arc length along the seam line)
 //! and [`crate::Teilnetz::randort`] (arc length along the mesh boundary) are one
@@ -92,6 +122,22 @@ const NULL_BREITE_MM: f64 = 1e-6;
 /// Twice the area below which a triangle counts as degenerate (mm²).
 const MIN_FLAECHE2: f64 = 1e-9;
 
+/// An arc fraction below this is the ring point itself, not a point between two
+/// ring points (dimensionless).
+///
+/// Used where a boundary point lands on a ring vertex: it must reuse that
+/// vertex instead of inserting a second point at the same place. Not
+/// [`NULL_BREITE_MM`], which is a length in mm on a different question.
+const BRUCH_EPS: f64 = 1e-9;
+
+/// How far a boundary point may lie from the seam line and still be welded (mm).
+///
+/// A thousandth of a millimetre - far below the roughly 10 mm of a mesh edge, so
+/// a boundary point that is genuinely elsewhere is refused, and far above the
+/// rounding of two walks over the same pattern points. Measured on the three
+/// test patterns: 0.000000 mm everywhere.
+const RAND_AUF_NAHT_MM: f64 = 1e-3;
+
 /// The allowance strip of one piece, in millimetres in the piece's own frame.
 ///
 /// Two rings of the same length: `innen[i]` is a point of the seam line,
@@ -114,7 +160,7 @@ pub struct Streifen {
     /// [`crate::Teilnetz::punkte`], below [`crate::Teilnetz::nrand`]) whose
     /// stretch of seam line it lies on.
     ///
-    /// Empty until [`mit_ankern`] has seen the mesh's boundary points.
+    /// Empty until [`verschweisst`] has seen the mesh's boundary points.
     pub anker: Vec<u32>,
     /// The band's triangles. Indices below `innen.len()` are seam line points,
     /// above it cutting line points, so point `n + i` is `aussen[i]`.
@@ -150,13 +196,66 @@ impl Streifen {
 
     /// Whether the outer ring is the one [`crate::Teilnetz::schnitt`] holds.
     ///
+    /// Before [`verschweisst`] this was point for point. Welding splits the
+    /// outer ring where a boundary point arrives, so the two lists are no longer
+    /// identical - but they are still the same closed curve, and that is what
+    /// this checks now: same ring length, every outer point on the cutting line,
+    /// every cutting-line corner among the outer points. Splitting a segment
+    /// moves none of the three, so a band that drifts off the drawn line fails
+    /// here as it did before.
+    ///
     /// `false` for a piece without an allowance: both are empty then, and an
     /// empty band is not a cutting line.
     pub fn deckt_die_schnittlinie(&self, schnitt: &[[f64; 2]]) -> bool {
-        !self.aussen.is_empty()
-            && self.aussen.len() == schnitt.len()
-            && self.aussen.iter().zip(schnitt).all(|(a, b)| {
-                (a[0] - b[0]).abs() <= NULL_BREITE_MM && (a[1] - b[1]).abs() <= NULL_BREITE_MM
+        if self.aussen.len() < 3 || schnitt.len() < 3 {
+            return false;
+        }
+        let laenge = |ring: &[[f64; 2]]| {
+            let n = ring.len();
+            (0..n).map(|i| abstand(ring[i], ring[(i + 1) % n])).sum::<f64>()
+        };
+        if (laenge(&self.aussen) - laenge(schnitt)).abs() > NULL_BREITE_MM {
+            return false;
+        }
+        // Every outer point on the cutting line ...
+        let drauf = |p: [f64; 2]| {
+            (0..schnitt.len())
+                .map(|k| {
+                    let (a, b) = (schnitt[k], schnitt[(k + 1) % schnitt.len()]);
+                    let d = [b[0] - a[0], b[1] - a[1]];
+                    let l2 = d[0] * d[0] + d[1] * d[1];
+                    if l2 <= 0.0 {
+                        return abstand(p, a);
+                    }
+                    let t = (((p[0] - a[0]) * d[0] + (p[1] - a[1]) * d[1]) / l2).clamp(0.0, 1.0);
+                    abstand(p, [a[0] + t * d[0], a[1] + t * d[1]])
+                })
+                .fold(f64::INFINITY, f64::min)
+        };
+        // ... and every corner of the cutting line kept.
+        self.aussen.iter().all(|&p| drauf(p) <= NULL_BREITE_MM)
+            && schnitt.iter().all(|&q| {
+                self.aussen.iter().any(|&p| abstand(p, q) <= NULL_BREITE_MM)
+            })
+    }
+
+    /// The band point of a boundary point, if it is one: the inner ring index
+    /// whose place is that boundary point's, or `None` when the band has none.
+    ///
+    /// An exact match wins over a neighbour within [`NULL_BREITE_MM`]: after the
+    /// weld the ring holds the boundary point itself, and a second vertex a
+    /// micrometre away must not answer for it.
+    ///
+    /// `None` is the counted exception of the weld: a boundary point on a
+    /// stretch that carries no fabric has no triangle to be a vertex of.
+    pub fn bandpunkt_von(&self, p: [f64; 2]) -> Option<usize> {
+        self.innen
+            .iter()
+            .position(|&q| q == p)
+            .or_else(|| {
+                self.innen
+                    .iter()
+                    .position(|&q| abstand(p, q) <= NULL_BREITE_MM)
             })
     }
 
@@ -228,59 +327,131 @@ pub fn aus_teilrand(rand: &Teilrand) -> Result<Streifen, String> {
     let mm = rand.mm_pro_einheit;
     s.innen = idx.iter().map(|&i| [naht[i].x * mm, naht[i].y * mm]).collect();
     s.aussen = idx.iter().map(|&i| [aussen[i].x * mm, aussen[i].y * mm]).collect();
-
-    // Arc length along the seam line, from the ring's first point. A dropped
-    // duplicate takes no length with it, so summing the kept points is the
-    // whole polyline.
-    let mut bogen = 0.0;
-    for i in 0..s.innen.len() {
-        if i > 0 {
-            bogen += abstand(s.innen[i - 1], s.innen[i]);
-        }
-        s.bogen.push(bogen);
-    }
-
-    // Positive as the mesh wants them, see the module note on winding.
-    let positiv = ringflaeche(&s.aussen) >= 0.0;
-    let n = s.innen.len();
-    for i in 0..n {
-        let j = (i + 1) % n;
-        // No width at either end: there is no fabric here, and a quad of that
-        // shape would be a line with three corners - a degenerate triangle
-        // instead of a statement that the piece has no allowance.
-        if abstand(s.innen[i], s.aussen[i]) <= NULL_BREITE_MM
-            && abstand(s.innen[j], s.aussen[j]) <= NULL_BREITE_MM
-        {
-            s.ohne_breite += 1;
-            s.ohne_breite_mm += abstand(s.aussen[i], s.aussen[j]);
-            continue;
-        }
-        // Two triangles per stretch: the outer edge and one diagonal.
-        let mut t = [[n + i, n + j, j], [n + i, j, i]];
-        if !positiv {
-            t.iter_mut().for_each(|d| d.swap(1, 2));
-        }
-        for d in t {
-            let [a, b, c] = d.map(|k| s.punkt(k as u32));
-            if flaeche2(a, b, c) > MIN_FLAECHE2 {
-                s.dreiecke.push(d.map(|k| k as u32));
-            }
-        }
-    }
+    bogenskala(&mut s);
+    baue(&mut s);
     Ok(s)
 }
 
-/// `s` with [`Streifen::anker`] filled in from the mesh's boundary points.
+/// `s` welded to the mesh boundary: every point of `rand` becomes a vertex of
+/// the band's seam-line ring at its own coordinates.
 ///
-/// `kanten` are the piece's boundary edges in mm ([`crate::Teilnetz::kanten`])
-/// and `orte` the place of every boundary point on them
-/// ([`crate::Teilnetz::randort`]: edge and arc length from its start). Both are
-/// needed to place the boundary points on the same arc scale as
-/// [`Streifen::bogen`].
-pub fn mit_ankern(s: &Streifen, kanten: &[Kantenzug], orte: &[(usize, f64)]) -> Streifen {
-    let mut s = s.clone();
-    s.anker = anker(&s, kanten, orte);
-    s
+/// `rand` are the piece's boundary points in ring order
+/// ([`crate::Teilnetz::punkte`] below [`crate::Teilnetz::nrand`]), `kanten` and
+/// `orte` their places as in [`anker`]. The result keeps the seam line's
+/// vertices and splits a segment wherever a boundary point falls between two of
+/// them; each inserted point's partner on the cutting line is read off the
+/// *outer* segment at the same fraction, so it lies on the cutting line by
+/// construction and no area is added.
+///
+/// The weld rests on one assumption, the same one the anchors rest on: the arc
+/// length of [`Streifen::bogen`] and the arc length of `orte` are one scale -
+/// same origin, same direction, same total. Both walk the piece's pattern points
+/// in the piece's own direction, measured at 0.000000 mm on every piece of the
+/// three test patterns. When a boundary point is not on the seam line, the weld
+/// is not attempted at all: an unchanged strip is wrong in a way the tests
+/// report, a silently mispaired one would not be.
+///
+/// Boundary points on a stretch that carries no fabric are inserted all the
+/// same - one rule instead of two - and have no triangle to be a vertex of.
+pub fn verschweisst(
+    s: &Streifen,
+    rand: &[[f64; 2]],
+    kanten: &[Kantenzug],
+    orte: &[(usize, f64)],
+) -> Streifen {
+    let mut neu = geschweisst(s, rand, kanten, orte).unwrap_or_else(|| s.clone());
+    neu.anker = anker(&neu, kanten, orte);
+    neu
+}
+
+/// The welded strip, or `None` when the two arc scales do not fit together.
+fn geschweisst(
+    s: &Streifen,
+    rand: &[[f64; 2]],
+    kanten: &[Kantenzug],
+    orte: &[(usize, f64)],
+) -> Option<Streifen> {
+    let n = s.innen.len();
+    if n < 3 || s.aussen.len() != n || s.bogen.len() != n {
+        return None;
+    }
+    let u = s.bogen[n - 1] + abstand(s.innen[n - 1], s.innen[0]);
+    if u <= 0.0 {
+        return None;
+    }
+    let ort = randorte(kanten, orte, rand.len())?;
+
+    // Every boundary point on the ring's own scale: the ring vertex it is, or
+    // the segment and fraction where it falls between two of them.
+    let mut einsetzen: Vec<Vec<(f64, usize)>> = vec![Vec::new(); n];
+    let mut am_punkt: Vec<Option<usize>> = vec![None; n];
+    let mut auf_ring = 0usize;
+    for (i, &t) in ort.iter().enumerate() {
+        let t = t.rem_euclid(u);
+        let (k, f) = einordnen(&s.bogen, u, t);
+        // The point has to lie on the seam line, or the pairing below is
+        // meaningless. Checked against the segment the place points at, not
+        // against the whole ring: that is the partner the band would take.
+        let k1 = (k + 1) % n;
+        let q = [
+            s.innen[k][0] + f * (s.innen[k1][0] - s.innen[k][0]),
+            s.innen[k][1] + f * (s.innen[k1][1] - s.innen[k][1]),
+        ];
+        if abstand(rand[i], q) > RAND_AUF_NAHT_MM {
+            return None;
+        }
+        if f <= BRUCH_EPS {
+            if am_punkt[k].is_none() {
+                am_punkt[k] = Some(i);
+                auf_ring += 1;
+            }
+        } else if f >= 1.0 - BRUCH_EPS {
+            if am_punkt[k1].is_none() {
+                am_punkt[k1] = Some(i);
+                auf_ring += 1;
+            }
+        } else {
+            einsetzen[k].push((f, i));
+            auf_ring += 1;
+        }
+    }
+    // Not one boundary point in the band's own ring: nothing to weld.
+    if auf_ring == 0 {
+        return None;
+    }
+
+    let mut neu = Streifen::default();
+    for k in 0..n {
+        // A boundary point that falls on a ring vertex takes that vertex's
+        // place: it is the same point, but only this exact pair of coordinates
+        // makes the mesh share it. Keeping the ring's own copy would leave two
+        // vertices a hair apart, which is not a weld.
+        neu.innen.push(match am_punkt[k] {
+            Some(i) => rand[i],
+            None => s.innen[k],
+        });
+        neu.aussen.push(s.aussen[k]);
+        let k1 = (k + 1) % n;
+        let mut liste = std::mem::take(&mut einsetzen[k]);
+        liste.sort_by(|a, b| a.0.partial_cmp(&b.0).unwrap_or(std::cmp::Ordering::Equal));
+        let mut letzte = 0.0f64;
+        for (f, i) in liste {
+            // Two boundary points at the same place would be one vertex, not
+            // two: the first one holds it.
+            if f - letzte <= BRUCH_EPS {
+                continue;
+            }
+            letzte = f;
+            neu.innen.push(rand[i]);
+            neu.aussen.push([
+                s.aussen[k][0] + f * (s.aussen[k1][0] - s.aussen[k][0]),
+                s.aussen[k][1] + f * (s.aussen[k1][1] - s.aussen[k][1]),
+            ]);
+        }
+    }
+    bogenskala(&mut neu);
+    baue(&mut neu);
+    Some(neu)
 }
 
 /// Anchor of every outer point: the boundary point of its stretch of seam line.
@@ -335,6 +506,102 @@ fn anker(s: &Streifen, kanten: &[Kantenzug], orte: &[(usize, f64)]) -> Vec<u32> 
 
 fn abstand(a: [f64; 2], b: [f64; 2]) -> f64 {
     (a[0] - b[0]).hypot(a[1] - b[1])
+}
+
+/// The arc scale of a ring: length along the seam line from its first point.
+///
+/// A dropped duplicate takes no length with it, so summing the kept points is
+/// the whole polyline. The closing stretch is not in the list; the ring length
+/// is the last entry plus [`abstand`] to the first point.
+fn bogenskala(s: &mut Streifen) {
+    s.bogen.clear();
+    let mut bogen = 0.0;
+    for i in 0..s.innen.len() {
+        if i > 0 {
+            bogen += abstand(s.innen[i - 1], s.innen[i]);
+        }
+        s.bogen.push(bogen);
+    }
+}
+
+/// The band's triangles over the two rings as they stand.
+///
+/// Called after every change to the rings, so the count of stretches without
+/// fabric and the triangle list always describe the same rings.
+fn baue(s: &mut Streifen) {
+    // Positive as the mesh wants them, see the module note on winding.
+    let positiv = ringflaeche(&s.aussen) >= 0.0;
+    let n = s.innen.len();
+    for i in 0..n {
+        let j = (i + 1) % n;
+        // No width at either end: there is no fabric here, and a quad of that
+        // shape would be a line with three corners - a degenerate triangle
+        // instead of a statement that the piece has no allowance.
+        if abstand(s.innen[i], s.aussen[i]) <= NULL_BREITE_MM
+            && abstand(s.innen[j], s.aussen[j]) <= NULL_BREITE_MM
+        {
+            s.ohne_breite += 1;
+            s.ohne_breite_mm += abstand(s.aussen[i], s.aussen[j]);
+            continue;
+        }
+        // Two triangles per stretch: the outer edge and one diagonal.
+        let mut t = [[n + i, n + j, j], [n + i, j, i]];
+        if !positiv {
+            t.iter_mut().for_each(|d| d.swap(1, 2));
+        }
+        for d in t {
+            let [a, b, c] = d.map(|k| s.punkt(k as u32));
+            if flaeche2(a, b, c) > MIN_FLAECHE2 {
+                s.dreiecke.push(d.map(|k| k as u32));
+            }
+        }
+    }
+}
+
+/// Arc length of every boundary point along the piece's boundary, from the
+/// first one: edge prefixes plus the place within the edge.
+///
+/// `None` when `orte` names an edge `kanten` does not have, has the wrong
+/// number of entries or does not run forward - a wrong order is worse than no
+/// weld, since every insert would go to the wrong place.
+fn randorte(kanten: &[Kantenzug], orte: &[(usize, f64)], nrand: usize) -> Option<Vec<f64>> {
+    if kanten.is_empty() || orte.len() != nrand || orte.len() < 2 {
+        return None;
+    }
+    let mut praefix = Vec::with_capacity(kanten.len());
+    let mut summe = 0.0;
+    for k in kanten {
+        praefix.push(summe);
+        summe += k.laenge;
+    }
+    let mut ort = Vec::with_capacity(orte.len());
+    for &(k, v) in orte {
+        ort.push(praefix.get(k)? + v);
+    }
+    if ort.windows(2).any(|w| w[1] < w[0]) {
+        return None;
+    }
+    Some(ort)
+}
+
+/// Where an arc length falls on the closed ring: segment `k` and the fraction
+/// `f` from `bogen[k]` to the next ring point.
+///
+/// `f == 0` means the length is the ring point `k` itself; the caller decides
+/// what to do with it. The last segment runs from the last point back to the
+/// first, so a length in that stretch is reported as it is, not as a wrap.
+fn einordnen(bogen: &[f64], u: f64, t: f64) -> (usize, f64) {
+    let n = bogen.len();
+    let t = t.rem_euclid(u);
+    for k in 0..n {
+        let l0 = bogen[k];
+        let l1 = if k + 1 < n { bogen[k + 1] } else { u };
+        if t >= l0 - BRUCH_EPS && t <= l1 + BRUCH_EPS {
+            let f = if l1 - l0 <= 0.0 { 0.0 } else { (t - l0) / (l1 - l0) };
+            return (k, f.clamp(0.0, 1.0));
+        }
+    }
+    (n - 1, 1.0)
 }
 
 /// Twice the signed area of the triangle `a b c`: positive when it is wound

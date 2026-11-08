@@ -118,8 +118,8 @@ pub struct Teilnetz {
     ///
     /// Leer, wenn das Teil keine Zugabe hat. Neue Daten: die Punkte, die
     /// Dreiecke und die Nahtpaare des Netzes bleiben, wie sie sind - das Band
-    /// an den Rand zu schweißen und nach innen zu falten ist der nächste
-    /// Schritt.
+    /// ist an den Randpunkten des Teils geschweißt, nach innen falten ist der
+    /// nächste Schritt.
     pub zugabe: zugabe::Streifen,
     /// Der Fadenlauf des Teils, im selben Bezugssystem und in derselben
     /// Einheit wie [`Teilnetz::punkte`]; `None` ohne sichtbaren
@@ -328,7 +328,10 @@ pub fn vernetze(
         tr.glaetten(p.glaetten);
         let g = &plan.teile[ti];
         let punktknoten = g.knoten.iter().enumerate().map(|(k, name)| (name.clone(), ri.knoten(k))).collect();
-        let zugabe = zugabe::mit_ankern(&g.zugabe, &g.kanten, &ri.orte);
+        // The band is welded to the boundary points of the finished mesh: the
+        // points only exist after triangulation, so the weld happens here and
+        // not in `Teilgeo::aus`.
+        let zugabe = zugabe::verschweisst(&g.zugabe, &tr.pf[..tr.nrand], &g.kanten, &ri.orte);
         teile.push(Teilnetz {
             teil: g.teil.clone(),
             dreiecke: tr.dreiecke(),
