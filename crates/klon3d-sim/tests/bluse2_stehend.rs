@@ -254,7 +254,24 @@ fn bluse2_stehend() {
         Teilvorgabe { material: dicke.map_or(RADICAL_RUBBER_04, |d| RADICAL_RUBBER_04.mit_dicke(d)), reduktion: 0.0 }
     };
     let param = Simparameter { schwerkraft: [0.0, 0.0, -9.81], daempfung: 1.0, ..Simparameter::default() };
-    let mut s = Szene::aus_netz(&p.netz, &vg, &|ti, q| p.lage(ti, q), vec![Koerper::netz(k.clone())], param);
+    // Mit gefalteter Nahtzugabe: das Band ist Stoff und hängt an der Nahtlinie,
+    // die Nahtpaare und das Musternetz bleiben, wie sie sind.
+    let (mut s, falt) =
+        Szene::aus_netz_mit_falte(&p.netz, &vg, &|ti, q| p.lage(ti, q), vec![Koerper::netz(k.clone())], param);
+    eprintln!(
+        "  Zugabe: {} Teile mit Band, {} Punkte, {} Dreiecke, {:.1} mm², {} Falzkanten \
+         ({} von einer Gehrung verhindert), Winkel {:.4}..{:.4} Grad, \
+         {} Dehnkanten in der Form gedeckelt",
+        falt.teile,
+        falt.punkte,
+        falt.dreiecke,
+        falt.flaeche_mm2,
+        falt.falzkanten,
+        falt.falzkanten_gehrung,
+        falt.falz_winkel_min_rad.to_degrees(),
+        falt.falz_winkel_max_rad.to_degrees(),
+        falt.kanten_form_gedeckelt
+    );
     let x_gelegt = s.x.clone();
     let mut rw = ImplizitCg::neu(ImplizitParameter::default());
     let ablauf = Anziehen::default();

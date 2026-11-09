@@ -118,8 +118,8 @@ pub struct Teilnetz {
     ///
     /// Leer, wenn das Teil keine Zugabe hat. Neue Daten: die Punkte, die
     /// Dreiecke und die Nahtpaare des Netzes bleiben, wie sie sind - das Band
-    /// ist an den Randpunkten des Teils geschweißt, nach innen falten ist der
-    /// nächste Schritt.
+    /// ist an den Randpunkten des Teils geschweißt. Nach innen falten und als
+    /// eigenen Stoff in die Szene hängen tut [`klon3d_sim::saumfalte`].
     pub zugabe: zugabe::Streifen,
     /// Der Fadenlauf des Teils, im selben Bezugssystem und in derselben
     /// Einheit wie [`Teilnetz::punkte`]; `None` ohne sichtbaren

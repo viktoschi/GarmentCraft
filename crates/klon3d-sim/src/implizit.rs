@@ -728,8 +728,11 @@ impl ImplizitCg {
                 None => (0.0, [[0.0; 3]; 4]),
             };
             if !nur_topologie {
+                // The angle is only defined modulo 2π; a fold's rest angle sits
+                // on the branch cut (see `cpu::winkel_fehler`).
+                let fehler = crate::cpu::winkel_fehler(theta, ruhe);
                 for m in 0..4 {
-                    f[idx[m]] = sub(f[idx[m]], mul(gr[m], k * (theta - ruhe)));
+                    f[idx[m]] = sub(f[idx[m]], mul(gr[m], k * fehler));
                 }
             }
             biegungen.push(Biegung { punkte: *p, grad: gr, k, ruhe });

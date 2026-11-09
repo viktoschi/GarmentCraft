@@ -53,6 +53,18 @@
 //! The rest lengths are where the three backends agree already (CPU reference,
 //! CG solve, compute shader), so the ease needs no field of its own in the
 //! system. [`Szene::einhalte_kanten`] counts the edges it touched.
+//!
+//! ## The allowance band as fabric
+//!
+//! A piece with an allowance carries its band as triangles
+//! ([`klon3d_mesh::zugabe`]). [`Szene::aus_netz_mit_falte`] asks
+//! [`crate::saumfalte`] to fold that band 180° inward at the seam line and add it
+//! to the scene as cloth of its own: appended after the pattern pieces, with the
+//! same material, its own mass and stretch springs, and a 180° bending constraint
+//! along the fold. [`Szene::aus_netz`] does not, so every existing call site
+//! computes exactly as before. The seam pairs, the points and the triangles of
+//! the pattern net are the same either way; the seam line stays the mesh
+//! boundary and the band is a flap on its reverse.
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::ops::Range;
@@ -227,6 +239,43 @@ impl Szene {
         koerper: Vec<Koerper>,
         param: Simparameter,
     ) -> Szene {
+        Self::bauen(netz, vorgabe, lage, koerper, param, false).0
+    }
+
+    /// The same scene, with every piece's allowance band folded 180° inwards and
+    /// carried as fabric of its own.
+    ///
+    /// The band is appended after the pattern pieces as extra [`Teilinfo`]s named
+    /// `<piece> (Zugabe)`; see [`crate::saumfalte`] for what it adds and what it
+    /// costs. The seam point pairs, [`klon3d_mesh::Teilnetz::punkte`] and
+    /// [`klon3d_mesh::Teilnetz::dreiecke`] are untouched: the seam line stays the
+    /// mesh boundary and only gains a flap on its reverse.
+    ///
+    /// The [`crate::saumfalte::Faltbericht`] is returned rather than stored,
+    /// because it describes one build: which fold edges the strip's miters
+    /// prevented, how far the band's seam line sat from the boundary before the
+    /// holds took over, how much fabric the band is, and how many of its edges
+    /// needed the stiffness cap ([`crate::saumfalte::HOECHSTE_FORM`]).
+    pub fn aus_netz_mit_falte(
+        netz: &Musternetz,
+        vorgabe: &dyn Fn(&str) -> Teilvorgabe,
+        lage: &dyn Fn(usize, [f64; 2]) -> [f64; 3],
+        koerper: Vec<Koerper>,
+        param: Simparameter,
+    ) -> (Szene, crate::saumfalte::Faltbericht) {
+        Self::bauen(netz, vorgabe, lage, koerper, param, true)
+    }
+
+    /// Builds the scene; `falte` appends the folded allowance band (see
+    /// [`Self::aus_netz_mit_falte`]).
+    fn bauen(
+        netz: &Musternetz,
+        vorgabe: &dyn Fn(&str) -> Teilvorgabe,
+        lage: &dyn Fn(usize, [f64; 2]) -> [f64; 3],
+        koerper: Vec<Koerper>,
+        param: Simparameter,
+        falte: bool,
+    ) -> (Szene, crate::saumfalte::Faltbericht) {
         let mut x = Vec::new();
         let mut masse = Vec::new();
         let mut kollisionsabstand = Vec::new();
@@ -450,11 +499,38 @@ impl Szene {
             }
         }
 
+        // The folded allowance band, if asked for: appended after the pattern
+        // pieces, before the constraint groups are colour-ordered so its indices
+        // take part in that ordering like every other point.
+        let faltbericht = if falte {
+            let f = crate::saumfalte::falte_band(netz, &x, &teile, lage);
+            x.extend(f.punkte);
+            masse.extend(f.masse);
+            kollisionsabstand.extend(f.kollisionsabstand);
+            reibung.extend(f.reibung);
+            dreiecke.extend(f.dreiecke);
+            ruhe_inv.extend(f.ruhe_inv);
+            faser.extend(f.faser);
+            teile.extend(f.teile);
+            for (p, r, a) in f.abstand {
+                a_p.push(p);
+                a_r.push(r);
+                a_a.push(a);
+            }
+            for (p, r, a) in f.biegung {
+                b_p.push(p);
+                b_r.push(r);
+                b_a.push(a);
+            }
+            f.bericht
+        } else {
+            crate::saumfalte::Faltbericht::default()
+        };
         let np = x.len();
         let w = masse.iter().map(|&m| if m > 0.0 { 1.0 / m } else { 0.0 }).collect();
         let biegung = Gruppe::geordnet(b_p, b_r, b_a, np);
         let biegung_grund = biegung.nachgiebigkeit.clone();
-        Szene {
+        let szene = Szene {
             v: vec![[0.0; 3]; np],
             w,
             masse,
@@ -477,7 +553,8 @@ impl Szene {
             param,
             zeit: 0.0,
             x,
-        }
+        };
+        (szene, faltbericht)
     }
 
     /// Bending energy of the current shape, in J: `½·θ²/α` summed over the

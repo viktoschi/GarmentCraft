@@ -56,9 +56,9 @@
 //! The band is new data: no point, no triangle and no seam pair of
 //! [`crate::Teilnetz::punkte`], [`crate::Teilnetz::dreiecke`] or
 //! [`crate::Musternetz::naehte`] is added, moved or renumbered, and welding only
-//! touches the band's own rings. Folding it inward and giving the band a seam is
-//! the next step; that one changes what the solver sees, so it does not belong
-//! in the same change as the weld.
+//! touches the band's own rings. Folding it inward and giving the band a seam
+//! lives in `klon3d_sim::saumfalte`, after the placement - it changes what the
+//! solver sees, so it is a change of its own (#123) and not part of the weld.
 //!
 //! ## Winding: the band is the same sheet, and the mesh wants it positive
 //!
