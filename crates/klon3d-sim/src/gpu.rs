@@ -386,8 +386,16 @@ fn aufbau_b(
         geo[basis + 1u] = vec4<f32>(g1, 0.0);
         geo[basis + 2u] = vec4<f32>(g2, 0.0);
         geo[basis + 3u] = vec4<f32>(g3, 0.0);
-        geo[basis + 4u] = vec4<f32>(theta - biege[2u * c + 1u].y, 0.0, 0.0, 0.0);
+        geo[basis + 4u] = vec4<f32>(winkel_fehler(theta, biege[2u * c + 1u].y), 0.0, 0.0, 0.0);
     }
+}
+
+/// The angle difference the short way round the circle: a dihedral angle only
+/// exists modulo 2π, and a fold's rest angle of ±π sits exactly on the branch cut
+/// of `atan2` (see `cpu::winkel_fehler`).
+fn winkel_fehler(theta: f32, ruhe: f32) -> f32 {
+    let d = theta - ruhe;
+    return d - 6.283185307179586 * round(d / 6.283185307179586);
 }
 
 fn aussen(a: vec3<f32>, b: vec3<f32>) -> mat3x3<f32> {

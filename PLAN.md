@@ -98,7 +98,7 @@ Formula engine: lexer, recursive descent, QMuParser dialect, 9 tests green.
 | L036 (third-party, mm) | the only pattern with `trueDarts`, `cubicBezier`, `cubicBezierPath` and formulas on axis sub-curves; checked with a synthetic body against Seamly2D's export (`tests/l036_seamly.rs`, skips without the pattern) | **#42, finding 123**: all 204 named points within 7e-5 mm of Seamly2D (probe pieces, one per point), 4 of 5 seam lines ≤ 0.08 mm. **Since #49 all five** within 0.001 mm in both directions: the seam line is cleaned like Seamly2D's `mainPathPoints` (`schleifen.rs`: near duplicates, spikes and loops out; the centre back of "L036 - back" overlaps itself, 2294.16 instead of 2727.4 mm). Node points keep their place, and nodes inside a removed loop drop out of the edges |
 | Seam line cleanup | `schleifen.rs`, called from `kontur.rs`; points of point nodes are fixed, a node in a removed loop is dropped from the boundary edges (`kanten.rs`) instead of leaving an edge of length zero | **#49**: synthetic cases (backtracking run, figure eight, spike, near duplicates, fixed points, a piece with loop nodes); Bolero v37 and stocking v26 still match Seamly2D's export; workspace tests green |
 | `idObject` resolution | piece nodes → outline paths | piece outlines close |
-| Seam allowance | `seamAllowance` bool, `width` as a formula, `<CSA>` | the allowance is a **run along the edge**, not one value: arithmetic `nahtzugabe.rs` (#70), the contour from a piece's edges `saumkontur.rs` (#74), both with tests (findings 132, 133, see Stage 3). Drawn by the DXF export (#78), the 2D view (#80) and `klon3d umriss` (#82); carried into the mesh since #117 as the ring (`Teilnetz::schnitt`) and since #119 as a strip of triangles (`Teilnetz::zugabe`, `klon3d-mesh/src/zugabe.rs`), welded to the piece's boundary points since #121 (`zugabe::verschweisst`), still not folded inward |
+| Seam allowance | `seamAllowance` bool, `width` as a formula, `<CSA>` | the allowance is a **run along the edge**, not one value: arithmetic `nahtzugabe.rs` (#70), the contour from a piece's edges `saumkontur.rs` (#74), both with tests (findings 132, 133, see Stage 3). Drawn by the DXF export (#78), the 2D view (#80) and `klon3d umriss` (#82); carried into the mesh since #117 as the ring (`Teilnetz::schnitt`) and since #119 as a strip of triangles (`Teilnetz::zugabe`, `klon3d-mesh/src/zugabe.rs`), welded to the piece's boundary points since #121 (`zugabe::verschweisst`), and since #123 folded 180° inward and carried by the scene as fabric of its own (`klon3d_sim::saumfalte`, `Szene::aus_netz_mit_falte`) |
 
 **Acceptance criterion:** the piece outlines of 10 patterns match `schnitt.py
 piece_outline`.
@@ -280,7 +280,7 @@ new modelling, and CLO's own field set has no columns for the arcs either.
 | Part | Content | Status |
 |---|---|---|
 | **Boundary edges** | seam line per piece split at the point nodes, length, notches, seam allowance per edge (`kanten.rs`) | **done** (finding 32) |
-| **Seam allowance contour** | the allowance is not one width per piece: the seam line is offset **point by point** by the allowance, with a run along the edge - no offset polygon, no self-intersection clean-up (`kanten.rs` keeps only `before`/`after` per node) | **readable from a piece and drawn** (`nahtzugabe.rs`, #70; `saumkontur.rs`, #74): `Saumkontur::aus_teilrand(&Teilrand, Ecken)`, tests `tests/saumkontur.rs`. Five callers take it: the DXF export as the piece's second closed line on layer 8 (`Muster::dxf_teile`, #78), the 2D view (#80), `klon3d umriss` (#82), the mesh as the ring (`Teilnetz::schnitt`, `klon3d-mesh/src/schnitt.rs`, #117) and since #119 the mesh as the strip of triangles whose outer edge is that ring (`Teilnetz::zugabe`, `klon3d-mesh/src/zugabe.rs`): the ring in mm in the net's own frame, empty for a piece without an allowance. The strip is data too - no net point, net triangle and no seam pair hangs on it yet. Reconstruction from `kanten.rs` alone, `Ecken::Eigen`; not modelled are the `<CSA>` paths, the line's own stored direction and finding 135's outer/inner split |
+| **Seam allowance contour** | the allowance is not one width per piece: the seam line is offset **point by point** by the allowance, with a run along the edge - no offset polygon, no self-intersection clean-up (`kanten.rs` keeps only `before`/`after` per node) | **readable from a piece and drawn** (`nahtzugabe.rs`, #70; `saumkontur.rs`, #74): `Saumkontur::aus_teilrand(&Teilrand, Ecken)`, tests `tests/saumkontur.rs`. Five callers take it: the DXF export as the piece's second closed line on layer 8 (`Muster::dxf_teile`, #78), the 2D view (#80), `klon3d umriss` (#82), the mesh as the ring (`Teilnetz::schnitt`, `klon3d-mesh/src/schnitt.rs`, #117) and since #119 the mesh as the strip of triangles whose outer edge is that ring (`Teilnetz::zugabe`, `klon3d-mesh/src/zugabe.rs`): the ring in mm in the net's own frame, empty for a piece without an allowance. The strip is data too - no net point, net triangle and no seam pair hangs on it; `klon3d_sim::saumfalte` folds it onto the piece's reverse (#123) and appends it to the scene as cloth of its own, which is where the solver starts reading it. Reconstruction from `kanten.rs` alone, `Ecken::Eigen`; not modelled are the `<CSA>` paths, the line's own stored direction and finding 135's outer/inner split |
 | **Seam assignment** | seam list `<pattern>.naehte` next to the pattern: sides made of whole boundary edges, 1:1 up to M:N; `klon3d naehte` checks lengths, notches, coverage (`naehte.rs`) | **done** (finding 32); **seam suggestion** `klon3d naehte --vorschlag` (finding 101): Bluse3, Bluse1, bustier and skirt edge for edge like the hand-written list, direction and mirroring from the seam graph; open: pleats (bolero), slits |
 | **Triangulation** | seam line → triangle mesh per piece, approx. 10 mm edge length: boundary split by curvature, ear clipping, Lawson, Ruppert with a minimum angle of 25°, smoothing; exact on an integer grid (`klon3d-mesh`) | **done** (finding 33) |
 | **Subdivision** | subdivide both seam partners equally by **length fraction** as in CLO (§4 of the specification), point nodes of both sides merged up to 2 mm; result: point pairs per sub-seam; `klon3d netz` | **done** (finding 33) |
@@ -427,9 +427,52 @@ boundary chord would move the band's area by up to 21.8 mm² - and where the
 contour has a miter (inner point duplicated, outer wedge dropped as negative) the
 band falls into several triangle components (592 / 663 / 109 against 12 / 16 / 5
 pieces). Both are properties of the strip from #119, not of the weld; the weld
-changes no area and no component count. What the mesh still does not have is the
-seam that **folds the band inward**: the band is new data, no point, triangle or
-seam pair of the net hangs on it, and the seam stays the overlap seam of today.
+changes no area and no component count.
+
+Since #123 the band is **folded 180° inwards at the seam line** and carried by the
+scene as fabric of its own (`klon3d_sim::saumfalte`, `Szene::aus_netz_mit_falte`).
+The fold is a turn, not a re-mesh: every cutting-line point turns about the fold
+axis through its own seam-line point, the axis being perpendicular to the point's
+offset and lying in the piece - the seam line *at that point* - so the whole band
+comes out at `π − 0.1°` whatever its width there, and the 0.1° keeps it off the
+`atan2` branch cut exactly at π. Four things carry it: the band's own mass,
+triangles and grainline (by the same rules as a pattern piece), a stretch spring
+per band edge, a rest-length-0 hold per band seam-line point onto the piece's
+boundary (two where the point sits inside a boundary edge; the stiffness is the
+piece's boundary spring there), and one bending constraint per fold edge with rest
+angle ±π. The pattern points, triangles and seam pairs stay exactly as they are
+(770 on `bluse2_v26`, 715 on `bluse3_v2`); the band is appended *after* the
+pieces as extra `Teilinfo`s named `<piece> (Zugabe)`, so every lookup by piece
+index or name - seams, measurements, glue zones, `platzierung` - is untouched.
+The strip's sliver triangles span the whole band width at a tenth of a millimetre
+and would give stretch stiffnesses of up to 7.8 · 10⁵ N/m against the piece's 574
+N/m; that range the solver does not resolve (the flat scene runs from 4 · 10⁻⁵ J to
+10⁷³ J in 180 frames), so each band edge's `A/l²` is capped at 1.65, the top of
+the pattern mesh's own range (0.25…1.65 on `bluse2_v26`, 0.21…1.74 on `bluse3_v2`,
+0.29…1.50 on `rock_2schlitze_v34`), which holds every band edge at or below the
+stiffness of the piece's own stiffest. With the cap the flat scene settles to
+0.006 m/s over 180 frames on the default solver. Still open: anisotropic material,
+self-collision of the band and the layers.
+
+**What the fold does to the acceptance numbers of `bluse2_stehend`** (release, same
+machine): the scene grows from 6 022 to 11 752 points and takes 1 818 s instead of
+450 s, resting speed 0.0008 m/s, deepest point +0.20 mm, 768 of 770 seam pairs within
+10 mm, nothing sinks - all four still pass. Faults 1, 3 and 4 stay above their floors
+(plunge at the bust +48.3 mm, shoulder blade +5.87 pp, sleeve +4.87 %). **Fault 5 does
+not**: the collar's free upper edge comes from 8.9 to 2.1 mm off the skin and its ends
+from 33.0 to 5.2 mm, against a floor of 10 mm. The band does not commit a fault here -
+the two collar halves gain 7.8 % and 7.6 % of their own mass, in line with the other
+pieces (+9.0 % front side, +9.7 % back side) - but a stand-up collar of 5 mm fabric
+holds itself up by bending alone, nothing is pinned, and the doubled layer at its free
+top edge is enough to let it fall against the neck. A real collar is glued or
+overlocked flat there; the band is the strip `Teilnetz::zugabe` built, a second layer
+that stands free. That is a limit of the model, not of the solver, and the test keeps
+its floor and fails on it.
+
+`bluse2_stehend_einhalte` passes with the fold (release, 2 892 s): cap air median 0.6 /
+0.9 mm, 99.6 / 99.9 % of the seam pairs within 10 mm, resting speed 0.0007 / 0.0006 m/s,
+deepest point +0.20 mm, and the ease switch still relieves the armhole side (10.23 pp)
+more than the cap side (1.61 pp).
 
 Three decisions live in `saumkontur.rs` and are assumptions, not findings:
 
@@ -1192,7 +1235,7 @@ per stage:
 | Stage | needed for fabric | Status |
 |---|---|---|
 | 1 Pattern reading | grainline per piece: read Seamly2D `<grainline>` (position, rotation), otherwise a fixed piece axis | **done** (`fadenlauf.rs`, #10): visible grainlines only, formula values in the pattern unit, anchored ones normalised into the seam line's box. Carried into the mesh since #88: `Teilnetz::fadenlauf` in mm in the net's own frame, and `klon3d netz --svg` draws the axis with the arrow tips; an unreadable grainline is a message in `Musternetz::fehler`, never a lost piece. `Fadenlauf::richtung()` gives the axis as a 2D unit vector |
-| 3 Mesh | carry the grainline into the mesh (direction per triangle); sewn seam with the seam allowance turned inward instead of an overlap seam; glue zone = fusible interfacing | grainline **done**, seam allowance and glue zone open: `Szene::faser` carries one unit vector per triangle (`klon3d-sim/src/faser.rs`, #106), taken from the piece's axis through the same triangle map the solver uses, so it follows a nonlinear placement - across the piece, not at one point. A piece without a readable grainline takes pattern x and is counted in `Szene::faser_ersatz`; a triangle the placement collapses takes its longest edge and is counted in `Szene::faser_entartet`. Carried data only, nothing reads it while the material stays isotropic. Unequal seam sides since #109: the mesh pairs them at the same arc fraction (it always did), and `Simparameter::einhalteweite` makes the longer side give the surplus — see "Ease in the solver" above. The **cutting line** is in the mesh as data since #117 (`Teilnetz::schnitt`, mm in the net's own frame, empty without an allowance, same `Ecken::Eigen` ring as the export), and since #119 the **strip of triangles** between the seam line and that cutting line (`Teilnetz::zugabe`, `klon3d-mesh/src/zugabe.rs`, outer edge the same ring, positive winding, one anchor per outer point, `klon3d netz` prints its length and triangle count), welded to the piece's boundary points since #121 (`zugabe::verschweisst`: every boundary point is a band vertex at its own coordinates, the split adds no area). Still open: the seam that turns the strip inward - neither changes what the solver reads yet, so the acceptance numbers of `bluse2_stehend` are untouched |
+| 3 Mesh | carry the grainline into the mesh (direction per triangle); sewn seam with the seam allowance turned inward instead of an overlap seam; glue zone = fusible interfacing | grainline **done**, seam allowance and glue zone open: `Szene::faser` carries one unit vector per triangle (`klon3d-sim/src/faser.rs`, #106), taken from the piece's axis through the same triangle map the solver uses, so it follows a nonlinear placement - across the piece, not at one point. A piece without a readable grainline takes pattern x and is counted in `Szene::faser_ersatz`; a triangle the placement collapses takes its longest edge and is counted in `Szene::faser_entartet`. Carried data only, nothing reads it while the material stays isotropic. Unequal seam sides since #109: the mesh pairs them at the same arc fraction (it always did), and `Simparameter::einhalteweite` makes the longer side give the surplus — see "Ease in the solver" above. The **cutting line** is in the mesh as data since #117 (`Teilnetz::schnitt`, mm in the net's own frame, empty without an allowance, same `Ecken::Eigen` ring as the export), and since #119 the **strip of triangles** between the seam line and that cutting line (`Teilnetz::zugabe`, `klon3d-mesh/src/zugabe.rs`, outer edge the same ring, positive winding, one anchor per outer point, `klon3d netz` prints its length and triangle count), welded to the piece's boundary points since #121 (`zugabe::verschweisst`: every boundary point is a band vertex at its own coordinates, the split adds no area). Since #123 the strip is folded 180° inwards at the seam line and carried by the scene as fabric of its own (`klon3d_sim::saumfalte`, `Szene::aus_netz_mit_falte`): the pattern points, triangles and seam pairs stay as they are, the band is appended after them with its own mass, stretch springs, a rest-length-0 hold onto the boundary and a 180° bending constraint per fold edge. It is opt-in, so only a scene that asks for it changes; the acceptance numbers below are the ones `bluse2_stehend` reports with the fold. Still open: anisotropic material, self-collision of the band and the layers |
 | 4 Solver | **anisotropic material**: warp, weft and shear separate; for this a **triangle continuum** instead of edge springs (those have ν = 1/3 and no independent shear); noticeable, direction-dependent bending; **self-collision** and layers, because fabric falls into folds | open; edge springs isotropic; self-collision since finding 116 (switch, CPU), layers missing. The direction per triangle is there since #106 (`Szene::faser`), so the material has something to be anisotropic about |
 | Material | `.zfab` reader in Rust, values from CLO's fabric library (ADR-015), no measurements of our own | **read** (`klon3d-pattern/src/zfab.rs`, #83): one reader for both containers, the CLO-fabric mapping lives in `klon3d-pipeline`; `anziehen --material` (#85) and `roehre --material` (#87) pick a `.zfab` by path or by a stem from `assets/stoffe`, through one shared resolution |
 | 5 Inspection output | drape and folds; comparison against CLO with the same fabric, draping and fitted reported separately (already specified) | open |

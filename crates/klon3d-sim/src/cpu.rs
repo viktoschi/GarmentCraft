@@ -219,6 +219,19 @@ pub(crate) fn abstand(
     dl_[j] = sub(dl_[j], mul(nrm, w[j] * dl));
 }
 
+/// Signed dihedral angle difference taken the short way round the circle.
+///
+/// A dihedral angle only exists modulo 2π, and `atan2` reports it in (−π, π].
+/// A rest angle of ±π (a fold turned over completely) therefore sits exactly on
+/// the branch cut: a fold built at +179.99° reports −179.99° after a perturbation
+/// and `θ − ruhe` jumps by −2π although the fabric moved by 0.02°. Wrapping the
+/// difference to (−π, π] leaves every ordinary bending constraint (rest ≈ 0)
+/// untouched and makes the fold continuous.
+pub(crate) fn winkel_fehler(theta: f64, ruhe: f64) -> f64 {
+    let d = theta - ruhe;
+    d - std::f64::consts::TAU * (d / std::f64::consts::TAU).round()
+}
+
 /// Vorzeichenbehafteter Diederwinkel an der Kante p0–p1; p2 liegt im Dreieck
 /// (p0, p1, p2), p3 im Dreieck (p1, p0, p3). Flach = 0. Liefert den Winkel und
 /// die Gradienten nach p0…p3 (Bridson u. a. 2003, „Simulation of Clothing
@@ -266,7 +279,7 @@ pub(crate) fn biegung(
     if nenner <= 0.0 {
         return;
     }
-    let dl = -(theta - ruhe) / nenner;
+    let dl = -winkel_fehler(theta, ruhe) / nenner;
     for k in 0..4 {
         dl_[idx[k]] = add(dl_[idx[k]], mul(g[k], w[idx[k]] * dl));
     }

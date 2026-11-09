@@ -55,6 +55,7 @@ pub mod nahtlage;
 pub mod netzkoerper;
 pub mod platzierung;
 pub mod roehre;
+pub mod saumfalte;
 pub mod selbstkollision;
 pub mod spannung;
 pub mod szene;
