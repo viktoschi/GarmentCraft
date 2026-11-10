@@ -138,6 +138,7 @@ fn flach(faktor: f64, steifigkeit: f64) -> Szene {
     let netz = klon3d_sim::roehre::rohr_netz(0.56, 0.28, 10.0).expect("Rechteck vernetzbar");
     let material = klon3d_sim::Material {
         dehnung_n_m: steifigkeit,
+        kette_n_m: steifigkeit,
         ..klon3d_sim::RADICAL_RUBBER_04
     };
     let vg = klon3d_sim::szene::Teilvorgabe {
@@ -222,6 +223,7 @@ fn zwei_teile_mit_verschiedener_steifigkeit_halten_ihre_kraft() {
 
     let steif = klon3d_sim::Material {
         dehnung_n_m: 2.0 * E_LATEX,
+        kette_n_m: 2.0 * E_LATEX,
         ..klon3d_sim::RADICAL_RUBBER_04
     };
     let vg = |name: &str| klon3d_sim::szene::Teilvorgabe {

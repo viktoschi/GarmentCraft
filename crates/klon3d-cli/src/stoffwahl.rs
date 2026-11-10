@@ -282,6 +282,7 @@ mod tests {
             .mit_dicke(dicke);
         for (x, y) in [
             (a.dehnung_n_m, b.dehnung_n_m),
+            (a.kette_n_m, b.kette_n_m),
             (a.schub_n_m, b.schub_n_m),
             (a.biegung_nm, b.biegung_nm),
             (a.flaechengewicht_kg_m2, b.flaechengewicht_kg_m2),

@@ -19,10 +19,22 @@
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct Material {
     pub name: &'static str,
-    /// Dehnsteifigkeit der Membran (CLO Stretch) in N/m.
+    /// Dehnsteifigkeit der Membran in **Schussrichtung** (CLO Stretch Weft,
+    /// `fSuK`) in N/m.
+    ///
+    /// Die Richtung ist Teil des Namens, nicht Zierde: `szene.rs` (Kantenfedern),
+    /// `saumfalte.rs` (Bandkanten) und `roehre.rs` lesen dieses Feld als die
+    /// Steifigkeit, die sie meinen, und `Klartschnitt`/tests prüfen es. Die Kette
+    /// steht getrennt in [`Self::kette_n_m`].
     pub dehnung_n_m: f64,
-    /// Schubsteifigkeit (CLO Shear) in N/m. Das Kantenfedernetz bildet sie
-    /// nicht getrennt ab (es hat ν = 1/3, G = 3/8·E); nur mitgeführt.
+    /// Dehnsteifigkeit der Membran in **Kettrichtung** (CLO Stretch Warp,
+    /// `fSvK`) in N/m. Für die acht Profile im Repo gleich dem Schuss
+    /// (isotrop, 0,002 % Unterschied); getrennt geführt, weil ein echtes
+    /// Gewebe sie trennt und die Membran beide Richtungen einzeln braucht.
+    pub kette_n_m: f64,
+    /// Schubsteifigkeit (CLO Shear, `fHK`) in N/m. Die Membran nimmt sie als
+    /// dritte unabhängige Größe; ν folgt daraus (`ν = E/(2G) − 1`), es wird
+    /// nicht gesetzt.
     pub schub_n_m: f64,
     /// Biegesteifigkeit (CLO Bending) in N·m.
     pub biegung_nm: f64,
@@ -40,6 +52,7 @@ pub struct Material {
 pub const RADICAL_RUBBER_04: Material = Material {
     name: "Latex_0.4mm_Radical_Rubber",
     dehnung_n_m: 348.274_156_2,
+    kette_n_m: 348.281_718_8,
     schub_n_m: 174.159_046_9,
     biegung_nm: 2482.2424e-9,
     flaechengewicht_kg_m2: 0.348_989_9,
@@ -53,6 +66,7 @@ pub const RADICAL_RUBBER_04: Material = Material {
 pub const RETIFIST_NR_040: Material = Material {
     name: "NR-sheet-0.40 (Retifist)",
     dehnung_n_m: 33.333_332,
+    kette_n_m: 33.333_332,
     schub_n_m: 6.666_666_5,
     biegung_nm: 60.361e-9,
     flaechengewicht_kg_m2: 0.380,
@@ -71,6 +85,7 @@ impl Material {
         let f = dicke / self.dicke_m;
         Material {
             dehnung_n_m: self.dehnung_n_m * f,
+            kette_n_m: self.kette_n_m * f,
             schub_n_m: self.schub_n_m * f,
             biegung_nm: self.biegung_nm * f.powi(3),
             flaechengewicht_kg_m2: self.flaechengewicht_kg_m2 * f,

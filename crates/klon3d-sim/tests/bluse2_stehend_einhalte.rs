@@ -59,6 +59,14 @@
 //! Needs the data of the reference installation (main machine only); without it
 //! the test says `übersprungen: … fehlt` and returns. Release only, two dressing
 //! runs.
+//!
+//! **Since #127 the second run fails one assertion** — the ordering of the ease,
+//! not the air under the cap. The continuum has no slack: a shortened rest length
+//! is a tensile pre-strain, so the eased sleeve pulls instead of gathering, the
+//! cap side stays long, and the seam springs take the surplus out of the armhole
+//! side. The numbers and the diagnostic are in `PLAN.md` ("What the continuum does
+//! to these numbers"). The assertion is left as it is: it is a property of #109
+//! that the continuum breaks, not a measurement error.
 
 use std::path::PathBuf;
 

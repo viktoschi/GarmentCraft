@@ -136,14 +136,34 @@ pub struct Gruppe<const N: usize> {
 
 impl<const N: usize> Gruppe<N> {
     fn geordnet(punkte: Vec<[u32; N]>, ruhe: Vec<f64>, alpha: Vec<f64>, npunkte: usize) -> Self {
+        Self::geordnet_mit_extra(punkte, ruhe, alpha, Vec::<()>::new(), npunkte).0
+    }
+
+    /// [`Self::geordnet`] for a group whose entries carry one extra value that
+    /// has to follow the same permutation — used for
+    /// [`Szene::membran_kante`], one flag per distance constraint.
+    fn geordnet_mit_extra<T>(
+        punkte: Vec<[u32; N]>,
+        ruhe: Vec<f64>,
+        alpha: Vec<f64>,
+        extra: Vec<T>,
+        npunkte: usize,
+    ) -> (Self, Vec<T>) {
         let (farbe, zahl) = faerbe(punkte.len(), npunkte, |c| &punkte[c][..]);
         let (idx, farben) = ordnung(&farbe, zahl);
-        Gruppe {
+        let mut extra: Vec<Option<T>> = extra.into_iter().map(Some).collect();
+        let g = Gruppe {
             punkte: idx.iter().map(|&c| punkte[c]).collect(),
             ruhe: idx.iter().map(|&c| ruhe[c]).collect(),
             nachgiebigkeit: idx.iter().map(|&c| alpha[c]).collect(),
             farben,
-        }
+        };
+        let extra = if extra.is_empty() {
+            Vec::new()
+        } else {
+            idx.iter().map(|&c| extra[c].take().unwrap()).collect()
+        };
+        (g, extra)
     }
 
     pub fn len(&self) -> usize {
@@ -201,6 +221,24 @@ pub struct Szene {
     /// collapses the triangle). They take their longest edge instead, and the
     /// count is reported so the substitute is never silent.
     pub faser_entartet: usize,
+    /// Triangles without a membrane: no rest area, or the eased rest lengths
+    /// close no triangle. They keep their [`Szene::abstand`] springs, so such a
+    /// triangle is still held, but no tool prints this count — only
+    /// `tests/kontinuum.rs` asserts it is 0 on its strip. Measured 0 of 10 734
+    /// on `bluse3_v2`.
+    pub membran_entartet: usize,
+    /// One flag per entry of [`Szene::abstand`]: `true` when the membrane
+    /// already carries that edge's stretch. Such a spring keeps its rest
+    /// length — the ease writes into it, [`Szene::unterschritte_weich`] and
+    /// [`crate::roehre::normallast`] read it — but the solver gives it no
+    /// force, so the fabric's stiffness is not counted twice.
+    pub membran_kante: Vec<bool>,
+    /// The membrane triangles as the solvers read them: point indices plus the
+    /// element ([`crate::kontinuum::MembranElement`]). Same length as
+    /// [`Szene::dreiecke`] minus the degenerate ones. Built once here because
+    /// it is pure build data — a solver that rebuilt it per substep would copy
+    /// the whole list five times a frame and change nothing.
+    pub membran_elemente: Vec<crate::kontinuum::MembranElement>,
     pub teile: Vec<Teilinfo>,
     /// Glue zones: bonded areas that behave like one plate of the total
     /// thickness ([`crate::klebung`]). Empty by default, so a scene without
@@ -297,6 +335,16 @@ impl Szene {
         let mut randkanten_index: Vec<BTreeMap<(u32, u32), usize>> = Vec::new();
         let mut punkte_m: Vec<Vec<[f64; 2]>> = Vec::new();
         let mut biegesteif: Vec<f64> = Vec::new();
+        // Per piece, for the membrane: the reduction, the grainline in pattern
+        // coordinates, and every edge (local, sorted) → its index in `a_r`, so
+        // the membrane can read the eased rest length of the triangle's edges.
+        let mut skala_je_teil: Vec<f64> = Vec::new();
+        let mut dir2_je_teil: Vec<[f64; 2]> = Vec::new();
+        let mut kanten_index_je_teil: Vec<BTreeMap<(u32, u32), usize>> = Vec::new();
+        // Per triangle in `dreiecke` order: piece index, its three local vertex
+        // indices (for the edge lookup) and its global ones (for the solver
+        // list), so the membrane can read the eased edge lengths.
+        let mut dreieck_teil: Vec<(usize, [u32; 3], [u32; 3])> = Vec::new();
 
         for (ti, t) in netz.teile.iter().enumerate() {
             let vg = vorgabe(&t.teil);
@@ -320,6 +368,8 @@ impl Szene {
             // Kanten mit anliegender Fläche, innere Kanten mit Gegenpunkten.
             let mut kanten: BTreeMap<(u32, u32), (f64, Vec<u32>)> = BTreeMap::new();
             let mut rand_index: BTreeMap<(u32, u32), usize> = BTreeMap::new();
+            // Every edge of this piece (local, sorted) → its index in `a_r`.
+            let mut kanten_e: BTreeMap<(u32, u32), usize> = BTreeMap::new();
             let d0 = dreiecke.len();
             for d in &t.dreiecke {
                 let (pa, pb, pc) = (p_m[d[0] as usize], p_m[d[1] as usize], p_m[d[2] as usize]);
@@ -340,6 +390,7 @@ impl Szene {
                 let det = m00 * m11 - m01 * m10;
                 ruhe_inv.push([m11 / det, -m01 / det, -m10 / det, m00 / det]);
                 dreiecke.push([d[0] + off as u32, d[1] + off as u32, d[2] + off as u32]);
+                dreieck_teil.push((ti, [d[0], d[1], d[2]], [d[0] + off as u32, d[1] + off as u32, d[2] + off as u32]));
                 // The grainline through this triangle's plane. A collapsed
                 // triangle has no plane: it takes its longest edge and is
                 // counted, so the substitute never passes as a measurement.
@@ -364,6 +415,7 @@ impl Szene {
                 a_p.push([i + off as u32, j + off as u32]);
                 a_r.push(l * skala);
                 a_a.push(1.0 / k);
+                kanten_e.insert((i, j), a_r.len() - 1);
                 if gegen.len() == 1 {
                     rand_index.insert((i, j), a_r.len() - 1);
                 }
@@ -388,6 +440,9 @@ impl Szene {
             randkanten.push(rand);
             randkanten_index.push(rand_index);
             punkte_m.push(p_m);
+            dir2_je_teil.push(dir2);
+            skala_je_teil.push(skala);
+            kanten_index_je_teil.push(kanten_e);
             biegesteif.push(vg.material.biegung_nm);
             teile.push(Teilinfo {
                 name: t.teil.clone(),
@@ -499,6 +554,63 @@ impl Szene {
             }
         }
 
+        // The membrane: one element per pattern triangle, with warp, weft and
+        // shear from the fabric profile (`kontinuum.rs`). It is built from the
+        // **eased** rest lengths, so a gathered seam shortens the membrane's rest
+        // shape exactly as it shortens the boundary springs. The three springs of
+        // a triangle that gets a membrane keep their rest length and compliance
+        // (the ease wrote into them, `unterschritte_weich` and `roehre::normallast`
+        // read them) but are flagged in `membran_kante`: the solver gives them no
+        // force, so the fabric's stiffness is not counted twice.
+        let mut membran_kante: Vec<bool> = vec![false; a_r.len()];
+        let mut membran_elemente: Vec<crate::kontinuum::MembranElement> = Vec::new();
+        let mut membran_entartet = 0usize;
+        for &(ti, d, global) in &dreieck_teil {
+            let vg = teile[ti].vorgabe;
+            let index = &kanten_index_je_teil[ti];
+            let p = &punkte_m[ti];
+            let mut kanten = [0.0f64; 3];
+            let mut vollstaendig = true;
+            for (k, &(i, j)) in [(d[0], d[1]), (d[1], d[2]), (d[2], d[0])].iter().enumerate() {
+                match index.get(&(i.min(j), i.max(j))) {
+                    Some(&e) => kanten[k] = a_r[e],
+                    // A triangle edge that is not in `a_r` cannot happen for a
+                    // piece's own triangle, but the membrane must not guess a
+                    // rest length: without all three it stays out.
+                    None => vollstaendig = false,
+                }
+            }
+            let gebaut = if vollstaendig {
+                let ruhe = [p[d[0] as usize], p[d[1] as usize], p[d[2] as usize]];
+                crate::kontinuum::Membran::bauen(
+                    ruhe,
+                    kanten,
+                    dir2_je_teil[ti],
+                    (vg.material.kette_n_m, vg.material.dehnung_n_m, vg.material.schub_n_m),
+                )
+            } else {
+                None
+            };
+            match gebaut {
+                Some(m) => {
+                    for &(i, j) in [(d[0], d[1]), (d[1], d[2]), (d[2], d[0])].iter() {
+                        if let Some(&e) = index.get(&(i.min(j), i.max(j))) {
+                            membran_kante[e] = true;
+                        }
+                    }
+                    // The solver list: only the triangles that got a membrane,
+                    // already in the form the CG and the device read — with the
+                    // **global** point indices, not the piece's local ones.
+                    membran_elemente.push(crate::kontinuum::MembranElement { punkte: global, element: m });
+                }
+                None => {
+                    membran_entartet += 1;
+                }
+            }
+        }
+        // The folded allowance band carries its own springs and no membrane, so
+        // its triangles get no entry here and its springs keep their force.
+
         // The folded allowance band, if asked for: appended after the pattern
         // pieces, before the constraint groups are colour-ordered so its indices
         // take part in that ordering like every other point.
@@ -512,6 +624,9 @@ impl Szene {
             ruhe_inv.extend(f.ruhe_inv);
             faser.extend(f.faser);
             teile.extend(f.teile);
+            for _ in &f.abstand {
+                membran_kante.push(false);
+            }
             for (p, r, a) in f.abstand {
                 a_p.push(p);
                 a_r.push(r);
@@ -528,6 +643,8 @@ impl Szene {
         };
         let np = x.len();
         let w = masse.iter().map(|&m| if m > 0.0 { 1.0 / m } else { 0.0 }).collect();
+        let (abstand, membran_kante) =
+            Gruppe::geordnet_mit_extra(a_p, a_r, a_a, membran_kante, np);
         let biegung = Gruppe::geordnet(b_p, b_r, b_a, np);
         let biegung_grund = biegung.nachgiebigkeit.clone();
         let szene = Szene {
@@ -536,7 +653,7 @@ impl Szene {
             masse,
             kollisionsabstand,
             reibung,
-            abstand: Gruppe::geordnet(a_p, a_r, a_a, np),
+            abstand,
             naht: Gruppe::geordnet(n_p, n_r, n_a, np),
             biegung,
             biegung_grund,
@@ -545,6 +662,9 @@ impl Szene {
             faser,
             faser_ersatz,
             faser_entartet,
+            membran_entartet,
+            membran_kante,
+            membran_elemente,
             teile,
             klebungen: Vec::new(),
             naht_biegung_ohne,

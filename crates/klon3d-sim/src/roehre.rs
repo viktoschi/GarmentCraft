@@ -310,9 +310,16 @@ pub struct Rutschprobe {
 /// Summe der Normallasten gegen die Körper (N): je Punkt im Kontakt der
 /// Federzug k·max(0, L − L₀) der anliegenden Kanten, Anteil gegen die
 /// Kontaktnormale — dieselbe Last, mit der die Reibung rechnet.
+///
+/// Distance constraints carried by a membrane are skipped: the fabric's pull
+/// there comes from the triangle ([`crate::kontinuum`]), not from the spring
+/// whose `k` the solver ignores.
 pub fn normallast(s: &Szene) -> f64 {
     let mut f = vec![[0.0f64; 3]; s.x.len()];
     for c in 0..s.abstand.len() {
+        if s.membran_kante.get(c).copied().unwrap_or(false) {
+            continue;
+        }
         let [i, j] = s.abstand.punkte[c].map(|p| p as usize);
         let d = crate::koerper::sub(s.x[j], s.x[i]);
         let l = norm(d);
@@ -321,6 +328,14 @@ pub fn normallast(s: &Szene) -> f64 {
             let fij = crate::koerper::mul(d, zug / l);
             f[i] = crate::koerper::add(f[i], fij);
             f[j] = crate::koerper::sub(f[j], fij);
+        }
+    }
+    for m in &s.membran_elemente {
+        let idx = m.punkte.map(|p| p as usize);
+        let p = [s.x[idx[0]], s.x[idx[1]], s.x[idx[2]]];
+        let fz = m.element.krafte_zug(p);
+        for k in 0..3 {
+            f[idx[k]] = crate::koerper::add(f[idx[k]], fz[k]);
         }
     }
     let mut summe = 0.0;

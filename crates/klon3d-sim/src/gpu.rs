@@ -123,7 +123,7 @@ impl Lage {
 ///
 /// Scalars only, no `vec3`: a `vec3<f32>` in a uniform has align 16 while
 /// `[f32; 3]` in Rust has align 4, and the two structures would drift apart
-/// silently. 22 `u32`, 8 `f32`, 2 of padding: 128 bytes.
+/// silently. 24 `u32`, 8 `f32`, 4 of padding: 144 bytes.
 #[repr(C)]
 #[derive(Clone, Copy, bytemuck::Pod, bytemuck::Zeroable)]
 struct Params {
@@ -132,6 +132,10 @@ struct Params {
     kanten: u32,
     naehte: u32,
     biege: u32,
+    /// Number of membrane triangles, and where their static block starts in
+    /// `geo` (in `vec4` units).
+    mem: u32,
+    mem_anf: u32,
     modus: u32,
     cg_max: u32,
     l_dv: u32,
@@ -160,7 +164,7 @@ struct Params {
     gx: f32,
     gy: f32,
     gz: f32,
-    _pad: [f32; 2],
+    _pad: [f32; 4],
 }
 
 const WGSL: &str = r#"
@@ -169,6 +173,8 @@ struct Params {
     kanten: u32,
     naehte: u32,
     biege: u32,
+    mem: u32,
+    mem_anf: u32,
     modus: u32,
     cg_max: u32,
     l_dv: u32,
@@ -197,6 +203,8 @@ struct Params {
     gz: f32,
     _pad0: f32,
     _pad1: f32,
+    _pad2: f32,
+    _pad3: f32,
 };
 
 @group(0) @binding(0) var<uniform> par: Params;
@@ -243,6 +251,255 @@ fn geo_biegung(c: u32) -> u32 {
     return 2u * (par.kanten + par.naehte) + 5u * c;
 }
 
+// --- membrane (continuum) -----------------------------------------------------
+//
+// One triangle's static data sits in `geo` after the bending block, four vec4
+// per triangle: (i0, i1, i2, A0), the inverse rest matrix `(r0, r1, r2, r3)`,
+// the material basis `(warp.x, warp.y, weft.x, weft.y)`, the three stiffnesses
+// `(E_warp, E_weft, G)`. Everything else is derived here from the positions, so
+// no ninth storage buffer is needed.
+
+fn mem_zeile(f1: vec3<f32>, f2: vec3<f32>, a: f32, b: f32) -> vec3<f32> {
+    return f1 * a + f2 * b;
+}
+
+/// `a(w)`: `wᵀg w` reads as `a(w)·g` for `g = (g11, g22, 2g12)`.
+fn a3f(w: vec2<f32>) -> vec3<f32> {
+    return vec3<f32>(w.x * w.x, w.y * w.y, w.x * w.y);
+}
+
+/// `c(w, v)`: `wᵀg v` reads as `c(w, v)·g`.
+fn c3f(u: vec2<f32>, v: vec2<f32>) -> vec3<f32> {
+    return vec3<f32>(u.x * v.x, u.y * v.y, 0.5 * (u.x * v.y + u.y * v.x));
+}
+
+/// The static rest of one membrane triangle, read from `geo`.
+///
+/// `a`, `b`, `c` are `a3f(kette)`, `a3f(schuss)` and `c3f(kette, schuss)`. The
+/// force, the stiffness, the strain and the geometric part each need them, so
+/// they are built once per triangle entry instead of four to five times. They
+/// are *not* written into `geo`: a larger block costs more bandwidth than the
+/// saved arithmetic is worth (measured, 7 `vec4` per triangle ran 15 % slower).
+struct Mem {
+    r: vec4<f32>,
+    e: vec3<f32>,
+    flaeche: f32,
+    idx: vec3<u32>,
+    a: vec3<f32>,
+    b: vec3<f32>,
+    c: vec3<f32>,
+}
+
+fn mem_lesen(c: u32) -> Mem {
+    let b = par.mem_anf + 4u * c;
+    let s0 = geo[b];
+    let s1 = geo[b + 1u];
+    let s2 = geo[b + 2u];
+    let s3 = geo[b + 3u];
+    let kette = vec2<f32>(s2.x, s2.y);
+    let schuss = vec2<f32>(s2.z, s2.w);
+    var m: Mem;
+    m.idx = vec3<u32>(u32(s0.x), u32(s0.y), u32(s0.z));
+    m.flaeche = s0.w;
+    m.r = s1;
+    m.e = vec3<f32>(s3.x, s3.y, s3.z);
+    m.a = a3f(kette);
+    m.b = a3f(schuss);
+    m.c = c3f(kette, schuss);
+    return m;
+}
+
+/// `F = [x1 - x0, x2 - x0]·D^-1` as its two columns.
+struct F2 {
+    f1: vec3<f32>,
+    f2: vec3<f32>,
+}
+
+fn mem_f(m: Mem, e1: vec3<f32>, e2: vec3<f32>) -> F2 {
+    var f: F2;
+    f.f1 = e1 * m.r.x + e2 * m.r.z;
+    f.f2 = e1 * m.r.y + e2 * m.r.w;
+    return f;
+}
+
+/// The Green strain `(e_warp, e_weft, e_shear)` in the material basis.
+fn mem_dehnung_aus(m: Mem, f: F2) -> vec3<f32> {
+    let g = vec3<f32>(dot(f.f1, f.f1), dot(f.f2, f.f2), 2.0 * dot(f.f1, f.f2));
+    return vec3<f32>(
+        0.5 * (dot(m.a, g) - 1.0),
+        0.5 * (dot(m.b, g) - 1.0),
+        0.5 * dot(m.c, g),
+    );
+}
+
+fn mem_dehnung(m: Mem, e1: vec3<f32>, e2: vec3<f32>) -> vec3<f32> {
+    return mem_dehnung_aus(m, mem_f(m, e1, e2));
+}
+
+/// `dU/dg` in the Voigt convention of `g`; `zug` keeps only the tensile part of
+/// the two normal strains (the friction load, `Membran::krafte_zug`).
+///
+/// The strain is passed in because the callers need it three times over
+/// (force, friction load, geometric part) and it is the same number.
+fn mem_d_aus(m: Mem, e: vec3<f32>, zug: bool) -> vec3<f32> {
+    var s = e;
+    if (zug) {
+        s = vec3<f32>(max(s.x, 0.0), max(s.y, 0.0), s.z);
+    }
+    return m.flaeche * (0.5 * m.e.x * s.x * m.a
+        + 0.5 * m.e.y * s.y * m.b
+        + 2.0 * m.e.z * s.z * m.c);
+}
+
+/// The two coefficient rows of `J_k`: every row of `J_k` is `a_i·f₁ + b_i·f₂`,
+/// so these six numbers are the whole Jacobian and no 3×3 matrix has to be
+/// built (`Membran::jacobi`).
+struct R {
+    a: vec3<f32>,
+    b: vec3<f32>,
+}
+
+fn mem_r(m: Mem, k: u32) -> R {
+    let r = m.r;
+    // Rows of J1 and J2 (`Membran::jacobi`); J0 = -(J1 + J2).
+    let a1 = vec3<f32>(2.0 * r.x, 0.0, 2.0 * r.y);
+    let b1 = vec3<f32>(0.0, 2.0 * r.y, 2.0 * r.x);
+    let a2 = vec3<f32>(2.0 * r.z, 0.0, 2.0 * r.w);
+    let b2 = vec3<f32>(0.0, 2.0 * r.w, 2.0 * r.z);
+    var q: R;
+    if (k == 0u) {
+        q.a = -(a1 + a2);
+        q.b = -(b1 + b2);
+    } else if (k == 1u) {
+        q.a = a1;
+        q.b = b1;
+    } else {
+        q.a = a2;
+        q.b = b2;
+    }
+    return q;
+}
+
+/// `J_kᵀ·w` from the row pair — two dot products and a vector combination
+/// instead of a matrix-vector product.
+fn mem_jtw(r: R, f1: vec3<f32>, f2: vec3<f32>, w: vec3<f32>) -> vec3<f32> {
+    return f1 * dot(r.a, w) + f2 * dot(r.b, w);
+}
+
+/// `J_kᵀ = ∂g/∂xₖ`, the matrix that turns `dU/dg` into the nodal force
+/// `−J_kᵀ·(dU/dg)` and maps an increment to `J_k·increment`. Rows of `J_k` are
+/// `(g11, g22, 2g12)`, columns `(x, y, z)`.
+///
+/// Kept as the definition of [`mem_r`]; the hot path of the operator uses the
+/// row pair directly, because the matrix costs far more than it carries.
+fn mem_jm(m: Mem, f1: vec3<f32>, f2: vec3<f32>, k: u32) -> mat3x3<f32> {
+    let r = mem_r(m, k);
+    // Column `gi` is `J_kᵀ`'s column, i.e. row `gi` of `J_k`.
+    return mat3x3<f32>(
+        mem_zeile(f1, f2, r.a.x, r.b.x),
+        mem_zeile(f1, f2, r.a.y, r.b.y),
+        mem_zeile(f1, f2, r.a.z, r.b.z),
+    );
+}
+
+/// `d2U/dg2·x` — symmetric and position independent (`Membran::d2U_dg2`).
+///
+/// Written as three scalar projections, the sum of three rank-one terms it
+/// actually is: the matrix would have to be formed and multiplied for nothing.
+fn mem_kgv(m: Mem, x: vec3<f32>) -> vec3<f32> {
+    return m.flaeche * (0.25 * m.e.x * m.a * dot(m.a, x)
+        + 0.25 * m.e.y * m.b * dot(m.b, x)
+        + m.e.z * m.c * dot(m.c, x));
+}
+
+/// The Frobenius-nearest positive semi-definite symmetric matrix to
+/// `[[a, c], [c, b]]`, as `(a, b, c)`. Mirrors `kontinuum::psd2`.
+///
+/// `m − r ≥ 0` is tested as `m ≥ 0 ∧ m² ≥ d² + c²`, which is the same
+/// comparison without the square root — and the identity is the case that
+/// actually occurs, every tensile state, so the root is rarely taken.
+fn mem_psd2(a: f32, b: f32, c: f32) -> vec3<f32> {
+    let m = 0.5 * (a + b);
+    let d = 0.5 * (a - b);
+    let q = d * d + c * c;
+    if (m >= 0.0 && m * m >= q) {
+        return vec3<f32>(a, b, c);
+    }
+    let r = sqrt(q);
+    let l_max = m + r;
+    if (l_max <= 0.0) {
+        return vec3<f32>(0.0);
+    }
+    let u = vec2<f32>(l_max - b, c);
+    let n2 = u.x * u.x + u.y * u.y;
+    if (n2 <= 0.0) {
+        return vec3<f32>(0.0);
+    }
+    let f = l_max / n2;
+    return vec3<f32>(f * u.x * u.x, f * u.y * u.y, f * u.x * u.y);
+}
+
+/// The geometric part of the Hessian — every block is one scalar times `I`
+/// (`Membran::geo_w_aus`): tensile-only normal stress, and the shear block
+/// projected onto the PSD cone so the CG keeps an operator it can solve with.
+///
+/// The matrix is `s[a][b]·I`, so the operator only ever needs **one row** of
+/// it, and the build only the **diagonal element**. Both are computed on their
+/// own: the nine scalars of the full matrix would be nine vector expressions
+/// per entry, three times per triangle.
+///
+/// `w` is [`mem_psd2`] of the tensile stress, passed in because it costs a
+/// square root and is the same for all three entries of a triangle.
+fn mem_w(m: Mem, d: vec3<f32>) -> vec3<f32> {
+    return mem_psd2(d.x, d.y, d.z);
+}
+
+/// Row `k` of `s` (three scalars, each times the identity).
+fn mem_geo_zeile(m: Mem, w: vec3<f32>, k: u32) -> vec3<f32> {
+    let r = m.r;
+    // `f1 = Σ c1ₐ·xₐ`, `f2 = Σ c2ₐ·xₐ`.
+    let c1 = vec3<f32>(-(r.x + r.z), r.x, r.z);
+    let c2 = vec3<f32>(-(r.y + r.w), r.y, r.w);
+    let a = c1[k];
+    let b = c2[k];
+    // s[a][b] = 2·(w₁·c1ₐc1_b + w₂·c2ₐc2_b + w₃·(c1ₐc2_b + c2ₐc1_b)).
+    return 2.0 * (w.x * c1 * a + w.y * c2 * b + w.z * (c1 * b + c2 * a));
+}
+
+/// The diagonal element `s[k][k]` — everything the build needs of `s`.
+fn mem_geo_diag(m: Mem, w: vec3<f32>, k: u32) -> f32 {
+    let r = m.r;
+    let c1 = vec3<f32>(-(r.x + r.z), r.x, r.z);
+    let c2 = vec3<f32>(-(r.y + r.w), r.y, r.w);
+    let a = c1[k];
+    let b = c2[k];
+    return 2.0 * (w.x * a * a + w.y * b * b + 2.0 * w.z * a * b);
+}
+
+/// `q = Σ_l J_l·d_l` for the two relative vectors — the `q` of
+/// `Membran::mal_h`. Rows of `J_l` are `a_l·f₁ + b_l·f₂`, and `J₀ = −(J₁+J₂)`,
+/// so only the two positive rows appear.
+fn mem_q(m: Mem, f1: vec3<f32>, f2: vec3<f32>, d1: vec3<f32>, d2: vec3<f32>) -> vec3<f32> {
+    let r1 = mem_r(m, 1u);
+    let r2 = mem_r(m, 2u);
+    return r1.a * dot(f1, d1) + r1.b * dot(f2, d1)
+        + r2.a * dot(f1, d2) + r2.b * dot(f2, d2);
+}
+
+/// `J_kᵀ·kg·J_k` for the diagonal block. `kg` is a sum of three rank-one terms
+/// `u·uᵀ` ([`mem_kgv`]), and `J_kᵀ·(u·uᵀ)·J_k = (J_kᵀ·u)·(J_kᵀ·u)ᵀ`, so no
+/// matrix is built and no matrix product is run.
+fn mem_dg(r: R, m: Mem, f1: vec3<f32>, f2: vec3<f32>, skala: f32) -> mat3x3<f32> {
+    let a = mem_jtw(r, f1, f2, m.a);
+    let b = mem_jtw(r, f1, f2, m.b);
+    let c = mem_jtw(r, f1, f2, m.c);
+    // WGSL has no scalar·matrix, so the factors go into the outer vectors.
+    let k = m.flaeche * skala;
+    return aussen(a * (0.25 * m.e.x * k), a)
+        + aussen(b * (0.25 * m.e.y * k), b)
+        + aussen(c * (m.e.z * k), c);
+}
+
 // x_j - x_i from both parts of the positions: the parts are subtracted
 // separately, so the difference keeps f32 precision of its own size.
 fn abst(i: u32, j: u32) -> vec3<f32> {
@@ -281,7 +538,7 @@ fn punkt(i: u32, off: u32, gefiltert: bool) {
             let d = pi - lies(off, j);
             let nr = g.xyz;
             sum = sum + a.z * (nr * dot(nr, d) * (1.0 - g.w) + d * g.w);
-        } else {
+        } else if (art == 1u) {
             let basis = geo_biegung(c);
             let q = biege[2u * c];
             let idx = vec4<u32>(u32(q.x), u32(q.y), u32(q.z), u32(q.w));
@@ -291,6 +548,27 @@ fn punkt(i: u32, off: u32, gefiltert: bool) {
             gp = gp + dot(geo[basis + 3u].xyz, lies(off, idx.w));
             let m = eintrag(e, 2u);
             sum = sum + biege[2u * c + 1u].x * geo[basis + m].xyz * gp;
+        } else {
+            // Membrane: (H·p)_k = J_kᵀ·(d²U/dg²)·q with q = Σ_l J_l·p_l. The
+            // Jacobian is the one at the build positions, exactly as
+            // `System::mal_h` uses `self.x` for it and `p` only for `q`.
+            let m = mem_lesen(c);
+            let e1 = abst(m.idx.x, m.idx.y);
+            let e2 = abst(m.idx.x, m.idx.z);
+            // `mem_jm` and `mem_q` want the columns of `F`, not the edge
+            // vectors: `J_k` is built from `F`, not from `x_j − x_i`.
+            let ff = mem_f(m, e1, e2);
+            let d1 = lies(off, m.idx.y) - lies(off, m.idx.x);
+            let d2 = lies(off, m.idx.z) - lies(off, m.idx.x);
+            let q = mem_q(m, ff.f1, ff.f2, d1, d2);
+            let rr = mem_r(m, eintrag(e, 2u));
+            sum = sum + mem_jtw(rr, ff.f1, ff.f2, mem_kgv(m, q));
+            // Geometric part `s[k][b]·x_b`, scalar times the identity — only
+            // row `k` of `s` is needed here.
+            let z = eintrag(e, 2u);
+            let sk = mem_geo_zeile(m, mem_w(m, mem_d_aus(m, mem_dehnung_aus(m, ff), true)), z);
+            sum = sum + sk.x * lies(off, m.idx.x) + sk.y * lies(off, m.idx.y)
+                + sk.z * lies(off, m.idx.z);
         }
     }
     var aus = sum * par.h2 + kopf[i].x * pi;
@@ -466,7 +744,7 @@ fn sammeln(
                 hv = hv + a.z * (nr * dot(nr, dv) * (1.0 - gk.w) + dv * gk.w);
                 let s = a.z * par.h2;
                 dg = dg + skalar(s * gk.w) + aussen(nr, nr) * (s * (1.0 - gk.w));
-            } else {
+            } else if (art == 1u) {
                 let basis = geo_biegung(c);
                 let q = biege[2u * c];
                 let k = biege[2u * c + 1u].x;
@@ -478,6 +756,33 @@ fn sammeln(
                 gp = gp + dot(geo[basis + 3u].xyz, lies(par.l_v, u32(q.w)));
                 hv = hv + gr * (k * gp);
                 dg = dg + aussen(gr, gr) * (k * par.h2);
+            } else {
+                // Membrane: f_k = -J_kᵀ·dU/dg, last_k the same with the tensile
+                // part only, (H·v)_k = J_kᵀ·kg·q with q = Σ_l J_l·v_l, and the
+                // diagonal block J_kᵀ·kg·J_k. Build runs at the build positions.
+                let m = mem_lesen(c);
+                let e1 = abst(m.idx.x, m.idx.y);
+                let e2 = abst(m.idx.x, m.idx.z);
+                let ff = mem_f(m, e1, e2);
+                let deh = mem_dehnung_aus(m, ff);
+                let rr = mem_r(m, eintrag(e, 2u));
+                f = f - mem_jtw(rr, ff.f1, ff.f2, mem_d_aus(m, deh, false));
+                last = last - mem_jtw(rr, ff.f1, ff.f2, mem_d_aus(m, deh, true));
+                let d1 = lies(par.l_v, m.idx.y) - lies(par.l_v, m.idx.x);
+                let d2 = lies(par.l_v, m.idx.z) - lies(par.l_v, m.idx.x);
+                let q = mem_q(m, ff.f1, ff.f2, d1, d2);
+                hv = hv + mem_jtw(rr, ff.f1, ff.f2, mem_kgv(m, q));
+                // dg has h² folded in, like the edge and bending blocks above.
+                dg = dg + mem_dg(rr, m, ff.f1, ff.f2, par.h2);
+                // Geometric part: (H·v)_k = Σ_b s[k][b]·v_b — row `k` of `s`,
+                // each entry times the identity. The build (`dg`) only needs the
+                // diagonal element s[k][k].
+                let z = eintrag(e, 2u);
+                let w = mem_w(m, mem_d_aus(m, deh, true));
+                let sk = mem_geo_zeile(m, w, z);
+                hv = hv + sk.x * lies(par.l_v, m.idx.x) + sk.y * lies(par.l_v, m.idx.y)
+                    + sk.z * lies(par.l_v, m.idx.z);
+                dg = dg + skalar(mem_geo_diag(m, w, z) * par.h2);
             }
         }
         schreib_inverse(i, dg);
@@ -714,6 +1019,7 @@ struct Speicher {
     kanten: usize,
     naehte: usize,
     biege: usize,
+    mem: usize,
     kopf: wgpu::Buffer,
     normale: wgpu::Buffer,
     pinv: wgpu::Buffer,
@@ -747,6 +1053,8 @@ pub struct GpuAufbau {
     /// Per bending constraint: the gradient of the dihedral angle at its four
     /// points (zero for a degenerate constraint).
     pub grad: Vec<[[f64; 3]; 4]>,
+    /// Per membrane triangle: the three points as stored on the device.
+    pub mem_punkte: Vec<[u32; 3]>,
     /// Per point: force, physical load, `H·v`, right-hand side.
     pub f: Vec<[f64; 3]>,
     pub last: Vec<[f64; 3]>,
@@ -945,18 +1253,33 @@ impl GpuLoeser {
         })
     }
 
-    /// The gathering structure: per point its distance constraints and bending
-    /// slots, with the slot the point occupies in the bending constraint.
-    /// Depends on the topology only.
+    /// The gathering structure: per point its distance constraints, bending
+    /// slots and membrane triangles, with the slot the point occupies in the
+    /// constraint. Depends on the topology only.
+    ///
+    /// Entry kinds: `0` a distance constraint (`c` index, `m` unused), `1` a
+    /// bending constraint (`c` index, `m` the point's slot 0..3), `2` a membrane
+    /// triangle (`c` index, `m` the point's slot 0..2).
     fn liste_bauen(sys: &System<'_>) -> Vec<u32> {
         let n = sys.masse.len();
         let mut zahl = vec![0u32; n];
+        // Counted exactly like it is filled below: a silenced edge must not
+        // leave a hole inside a point's range, or the shader reads the zero
+        // in the hole as constraint 0 with a real stiffness.
         for k in sys.kanten.iter().chain(&sys.naehte) {
+            if k.k == 0.0 {
+                continue;
+            }
             zahl[k.i as usize] += 1;
             zahl[k.j as usize] += 1;
         }
         for b in &sys.biegungen {
             for q in b.punkte {
+                zahl[q as usize] += 1;
+            }
+        }
+        for mem in sys.membran {
+            for q in mem.punkte {
                 zahl[q as usize] += 1;
             }
         }
@@ -972,7 +1295,17 @@ impl GpuLoeser {
             eintraege[4 * e..4 * e + 4].copy_from_slice(&[art, c, m, 0]);
         };
         // Kanten und Nähte teilen sich einen Indexraum: erst Kanten, dann Nähte.
+        //
+        // Eine Kante mit `k = 0` trägt nichts bei — sie ist die stillgelegte
+        // Abstandsfeder eines Membrandreiecks, ihre Steifigkeit sitzt im Dreieck.
+        // Sie kommt deshalb gar nicht erst in die Liste: der Operator und der
+        // Aufbau lesen sie sonst in jeder Iteration mit, und auf der Bluse sind
+        // das 26 % aller Einträge. Der Platz im Puffer bleibt trotzdem reserviert
+        // (die Länge hängt an `sys.kanten.len()`), damit kein Index verrutscht.
         for (c, k) in sys.kanten.iter().chain(&sys.naehte).enumerate() {
+            if k.k == 0.0 {
+                continue;
+            }
             eintrag(k.i as usize, 0, c as u32, 0);
             eintrag(k.j as usize, 0, c as u32, 0);
         }
@@ -981,8 +1314,40 @@ impl GpuLoeser {
                 eintrag(b.punkte[m] as usize, 1, c as u32, m as u32);
             }
         }
+        for (c, mem) in sys.membran.iter().enumerate() {
+            for m in 0..3 {
+                eintrag(mem.punkte[m] as usize, 2, c as u32, m as u32);
+            }
+        }
         aus.extend_from_slice(&eintraege);
         aus
+    }
+
+    /// The membrane's static block: four `vec4` per triangle, appended to `geo`
+    /// after the bending block. Nothing in it changes after the scene is built
+    /// (rest shape, material basis, stiffnesses), so it is written once when the
+    /// buffers are created and the device derives the rest from the positions.
+    fn membran_block(sys: &System<'_>) -> Vec<f32> {
+        let mut geo = Vec::with_capacity(sys.membran.len() * 16);
+        for mem in sys.membran {
+            let e = &mem.element;
+            let d = mem.punkte;
+            geo.extend_from_slice(&[d[0] as f32, d[1] as f32, d[2] as f32, e.flaeche as f32]);
+            geo.extend_from_slice(&e.ruhe_inv.map(|v| v as f32));
+            geo.extend_from_slice(&[
+                e.kette[0] as f32,
+                e.kette[1] as f32,
+                e.schuss[0] as f32,
+                e.schuss[1] as f32,
+            ]);
+            geo.extend_from_slice(&[
+                e.kette_n_m as f32,
+                e.dehnung_n_m as f32,
+                e.schub_n_m as f32,
+                0.0,
+            ]);
+        }
+        geo
     }
 
     /// Puts the system into the buffers: topology and stiffnesses when they
@@ -993,13 +1358,14 @@ impl GpuLoeser {
         self.bereit = false;
         let n = sys.masse.len();
         let (nk, nn, nb) = (sys.kanten.len(), sys.naehte.len(), sys.biegungen.len());
+        let nm = sys.membran.len();
         let neu = match &self.speicher {
-            Some(s) => s.n != n || s.kanten != nk || s.naehte != nn || s.biege != nb,
+            Some(s) => s.n != n || s.kanten != nk || s.naehte != nn || s.biege != nb || s.mem != nm,
             None => true,
         };
         if neu {
             let lage = Lage::neu(n);
-            let liste_laenge = n + 1 + 4 * (2 * (nk + nn) + 4 * nb);
+            let liste_laenge = n + 1 + 4 * (2 * (nk + nn) + 4 * nb + 3 * nm);
             let kopf = self.puffer(n as u64 * 16, false);
             let normale = self.puffer(n as u64 * 16, false);
             let pinv = self.puffer(n as u64 * 48, false);
@@ -1007,7 +1373,8 @@ impl GpuLoeser {
             let liste = self.puffer(liste_laenge as u64 * 4, false);
             let kante = self.puffer((nk + nn) as u64 * 16, false);
             let biege_b = self.puffer(nb as u64 * 32, false);
-            let geo = self.puffer((2 * (nk + nn) + 5 * nb) as u64 * 16, false);
+            let geo_laenge = 2 * (nk + nn) + 5 * nb + 4 * nm;
+            let geo = self.puffer(geo_laenge as u64 * 16, false);
             let params = self.puffer(std::mem::size_of::<Params>() as u64, false);
             let lesen = self.puffer((2 * n + 8) as u64 * 16, true);
             let puffer = [&params, &kopf, &normale, &pinv, &daten, &liste, &kante, &biege_b, &geo];
@@ -1029,6 +1396,7 @@ impl GpuLoeser {
                 kanten: nk,
                 naehte: nn,
                 biege: nb,
+                mem: nm,
                 kopf,
                 normale,
                 pinv,
@@ -1046,6 +1414,16 @@ impl GpuLoeser {
         }
         let s = self.speicher.clone().expect("eben gebaut");
         let lage = Lage::neu(n);
+
+        // The membrane's static block sits in `geo` right after the bending
+        // block, which the build kernels leave untouched. It is build data
+        // (rest shape, material basis, stiffnesses), so it is written on every
+        // upload - four `vec4` per triangle, and cheap next to the positions.
+        if nm > 0 {
+            let block = Self::membran_block(sys);
+            let anf = (2 * (nk + nn) + 5 * nb) as u64 * 16;
+            self.queue.write_buffer(&s.geo, anf, bytemuck::cast_slice(&block));
+        }
 
         // Topology and stiffnesses. Seam rest lengths change while a garment is
         // sewn, the rest stays; the neighbour list only follows the indices.
@@ -1116,6 +1494,8 @@ impl GpuLoeser {
             kanten: s.kanten as u32,
             naehte: s.naehte as u32,
             biege: s.biege as u32,
+            mem: s.mem as u32,
+            mem_anf: (2 * (s.kanten + s.naehte) + 5 * s.biege) as u32,
             modus,
             cg_max: sys.cg_max as u32,
             l_dv: lage.dv,
@@ -1142,7 +1522,7 @@ impl GpuLoeser {
             gx: sys.g[0] as f32,
             gy: sys.g[1] as f32,
             gz: sys.g[2] as f32,
-            _pad: [0.0; 2],
+            _pad: [0.0; 4],
         }
     }
 
@@ -1396,6 +1776,14 @@ impl GpuLoeser {
             let basis = 2 * nd + 5 * c;
             a.grad.push([0, 1, 2, 3].map(|m| als_f64(&geo, basis + m)));
         }
+        for c in 0..s.mem {
+            let basis = 2 * nd + 5 * s.biege + 4 * c;
+            a.mem_punkte.push([
+                geo[basis * 4] as u32,
+                geo[basis * 4 + 1] as u32,
+                geo[basis * 4 + 2] as u32,
+            ]);
+        }
         for i in 0..n {
             a.f.push(als_f64(&punkte, i));
             a.last.push(als_f64(&punkte, n + i));
@@ -1516,6 +1904,8 @@ mod tests {
             "fn aufbau_k(",
             "fn aufbau_b(",
             "fn sammeln(",
+            "fn mem_lesen(",
+            "fn mem_jm(",
         ] {
             assert!(super::WGSL.contains(name), "{name} fehlt im Shader");
         }

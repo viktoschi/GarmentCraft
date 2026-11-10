@@ -37,6 +37,7 @@ fn flach(faktor: f64, steifigkeit: f64) -> Szene {
     let netz = rohr_netz(0.56, 0.28, 10.0).expect("rectangle meshable");
     let material = klon3d_sim::Material {
         dehnung_n_m: steifigkeit,
+        kette_n_m: steifigkeit,
         ..RADICAL_RUBBER_04
     };
     let vg = Teilvorgabe {
@@ -176,6 +177,7 @@ fn zwei_teile_in_einer_szene_halten_ihre_steifigkeit() {
 
     let dick = klon3d_sim::Material {
         dehnung_n_m: 2.0 * E_LATEX,
+        kette_n_m: 2.0 * E_LATEX,
         ..RADICAL_RUBBER_04
     };
     let vg = |name: &str| Teilvorgabe {

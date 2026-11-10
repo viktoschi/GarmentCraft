@@ -351,6 +351,11 @@ fn aufbau_wie_cpu() {
     for _ in 0..3 {
         cpu.bild(&mut s);
     }
+    // Every triangle of the blouse gets a membrane; the count is read before
+    // the borrow below. `Szene::membran_entartet` is not printed by any tool, so
+    // this assertion is where the "0 of 10 734" in its doc comment comes from.
+    let entartet = s.membran_entartet;
+    assert_eq!(entartet, 0, "Dreiecke ohne Membran (Federn tragen sie allein)");
     let sys = cpu.system_fuer(&mut s);
     assert!(!sys.ohne_geometrie, "die CPU baut das System selbst");
     let a = gpu.aufbau_lesen(&sys);
@@ -358,11 +363,18 @@ fn aufbau_wie_cpu() {
     let distanz: Vec<_> = sys.kanten.iter().chain(&sys.naehte).collect();
     assert_eq!(a.kanten_punkte.len(), distanz.len());
     assert_eq!(a.biege_punkte.len(), sys.biegungen.len());
+    // A scene without membranes would pass the rest of this test without the
+    // continuum ever reaching the device, so the count is asserted first.
+    assert!(!sys.membran.is_empty(), "die Bluse trägt Membranen");
+    assert_eq!(a.mem_punkte.len(), sys.membran.len());
     for (c, k) in distanz.iter().enumerate() {
         assert_eq!(a.kanten_punkte[c], [k.i, k.j], "Abstand {c}: Punkte");
     }
     for (c, b) in sys.biegungen.iter().enumerate() {
         assert_eq!(a.biege_punkte[c], b.punkte, "Biegung {c}: Punkte");
+    }
+    for (c, m) in sys.membran.iter().enumerate() {
+        assert_eq!(a.mem_punkte[c], m.punkte, "Membran {c}: Punkte");
     }
 
     let rel = |x: f64, y: f64| (x - y).abs() / x.abs().max(1e-300);

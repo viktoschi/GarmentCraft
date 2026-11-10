@@ -99,6 +99,13 @@ pub struct Biegung {
     pub ruhe: f64,
 }
 
+/// A membrane triangle as the CG sees it ([`crate::kontinuum::MembranElement`]).
+/// Unlike [`Kante`] and [`Biegung`] it carries no direction from the build —
+/// [`crate::kontinuum::Membran`] derives everything from the positions, so the
+/// same record serves the CPU and the device. Built once with the scene, not
+/// once per substep.
+pub use crate::kontinuum::{Hessen, MembranElement};
+
 /// Das lineare System **eines Unterschritts**, in Feldern je Punkt bzw. je
 /// Constraint — die Form, die auf der GPU ohne Zusammenbau und ohne Atomics
 /// gelesen wird.
@@ -131,6 +138,19 @@ pub struct System<'a> {
     pub kanten: Vec<Kante>,
     pub naehte: Vec<Kante>,
     pub biegungen: Vec<Biegung>,
+    /// One membrane per pattern triangle ([`crate::kontinuum`]). The distance
+    /// constraints of these triangles are in `kanten` with `k = 0`: they keep
+    /// their slot (and their rest length, which the ease wrote) but carry no
+    /// force, so the fabric's stiffness is counted once.
+    ///
+    /// Borrowed from [`crate::Szene::membran_elemente`] — build data that never
+    /// changes, so it is not copied per substep.
+    pub membran: &'a [MembranElement],
+    /// The triangle part of the Hessian, one entry per element of [`Self::membran`],
+    /// evaluated at the **build** positions. The operator is applied many times
+    /// per substep with a tangent that is not re-evaluated (see
+    /// [`crate::kontinuum::Membran::hessen`]), so it is built here once.
+    pub membran_h: Vec<Hessen>,
     pub federn: Vec<Feder>,
     /// Rechte Seite `b = h·(f − h·H·v)`.
     pub rhs: Vec<[f64; 3]>,
@@ -155,12 +175,21 @@ impl System<'_> {
     /// `H·p` — Steifigkeit ohne Masse und ohne Faktor `h²`.
     ///
     /// Je Kante und Naht `k·[n·nᵀ + quer·(I − n·nᵀ)]·p`, je Biegung
-    /// `k·∇θ·(Σ ∇θ·p)`, je Feder die Blöcke der Selbstkollision.
+    /// `k·∇θ·(Σ ∇θ·p)`, je Membran ihr Tangentenblock, je Feder die Blöcke der
+    /// Selbstkollision.
+    ///
+    /// Kanten mit `k = 0` werden übersprungen: das sind die von einer Membran
+    /// getragenen Federkanten ([`crate::Szene::membran_kante`]), deren Steifigkeit
+    /// im Dreieck lebt. Sie durchzurechnen kostet je CG-Iteration so viel wie
+    /// das ganze übrige Netz und liefert exakt null.
     pub fn mal_h(&self, p: &[[f64; 3]], out: &mut [[f64; 3]]) {
         for o in out.iter_mut() {
             *o = [0.0; 3];
         }
         for k in self.kanten.iter().chain(&self.naehte) {
+            if k.k == 0.0 {
+                continue;
+            }
             let (i, j) = (k.i as usize, k.j as usize);
             let d = sub(p[i], p[j]);
             let bd = mul(add(mul(k.richtung, dot(k.richtung, d) * (1.0 - k.quer)), mul(d, k.quer)), k.k);
@@ -172,6 +201,14 @@ impl System<'_> {
             let gp: f64 = (0..4).map(|m| dot(b.grad[m], p[idx[m]])).sum();
             for m in 0..4 {
                 out[idx[m]] = add(out[idx[m]], mul(b.grad[m], b.k * gp));
+            }
+        }
+        for (m, h) in self.membran.iter().zip(&self.membran_h) {
+            let idx = m.punkte.map(|q| q as usize);
+            let d3 = [p[idx[0]], p[idx[1]], p[idx[2]]];
+            let hu = m.element.mal_h_aus(*h, d3);
+            for k in 0..3 {
+                out[idx[k]] = add(out[idx[k]], hu[k]);
             }
         }
         for fe in &self.federn {
@@ -202,6 +239,9 @@ impl System<'_> {
             })
             .collect();
         for k in self.kanten.iter().chain(&self.naehte) {
+            if k.k == 0.0 {
+                continue;
+            }
             for q in [k.i as usize, k.j as usize] {
                 m3_add_skal(&mut diag[q], k.k * h2 * k.quer);
                 m3_add_aus(&mut diag[q], k.richtung, k.richtung, k.k * h2 * (1.0 - k.quer));
@@ -211,6 +251,17 @@ impl System<'_> {
             for m in 0..4 {
                 let q = b.punkte[m] as usize;
                 m3_add_aus(&mut diag[q], b.grad[m], b.grad[m], b.k * h2);
+            }
+        }
+        for (m, h) in self.membran.iter().zip(&self.membran_h) {
+            let idx = m.punkte.map(|q| q as usize);
+            let bloecke = m.element.diag_bloecke_aus(*h);
+            for k in 0..3 {
+                for (a, z) in diag[idx[k]].iter_mut().enumerate() {
+                    for (b, d) in z.iter_mut().enumerate() {
+                        *d += h2 * bloecke[k][a][b];
+                    }
+                }
             }
         }
         for fe in &self.federn {
@@ -674,7 +725,15 @@ impl ImplizitCg {
         let mut kanten = Vec::with_capacity(s.abstand.len());
         for (e, &[i, j]) in s.abstand.punkte.iter().enumerate() {
             let (i, j) = (i as usize, j as usize);
-            let k = 1.0 / s.abstand.nachgiebigkeit[e];
+            // A distance constraint carried by a membrane keeps its slot (rest
+            // length, compliance) but gives no force: the fabric's stiffness
+            // lives in the triangle ([`crate::kontinuum`]). `k = 0` is what
+            // every operator below reads as "nothing here".
+            let k = if s.membran_kante.get(e).copied().unwrap_or(false) {
+                0.0
+            } else {
+                1.0 / s.abstand.nachgiebigkeit[e]
+            };
             let l0 = s.abstand.ruhe[e];
             if nur_topologie {
                 kanten.push(Kante { i: i as u32, j: j as u32, k, richtung: [0.0; 3], quer: 0.0, ruhe: l0 });
@@ -745,6 +804,44 @@ impl ImplizitCg {
                 }
             }
         }
+        // Membranes: one element per pattern triangle, borrowed from the scene
+        // (build data — rest shape, material basis and the three stiffnesses
+        // never change, so it is built once in [`Szene::aus_netz`] and not
+        // copied per substep). Only the force is computed here, and only when
+        // the CPU builds the system. The three distance constraints of a
+        // membrane triangle were silenced with `k = 0` above, so nothing counts
+        // twice.
+        if !nur_topologie {
+            for m in s.membran_elemente.iter() {
+                let idx = m.punkte.map(|q| q as usize);
+                let p3 = [s.x[idx[0]], s.x[idx[1]], s.x[idx[2]]];
+                let fe = m.element.krafte(p3);
+                for k in 0..3 {
+                    f[idx[k]] = add(f[idx[k]], fe[k]);
+                }
+                let fz = m.element.krafte_zug(p3);
+                for k in 0..3 {
+                    last[idx[k]] = add(last[idx[k]], fz[k]);
+                }
+            }
+        }
+        // The triangle part of the Hessian, at the build positions: the CG
+        // applies the operator up to `cg_max` times per substep with a tangent
+        // that is not re-evaluated, so this is built once here instead of once
+        // per iteration. Measured on the test blouse: the membrane was 0.79 of
+        // the 0.89 ms an operator pass cost, and it is now 0.28 ms against a
+        // one-off 0.39 ms here.
+        let membran_h: Vec<Hessen> = if nur_topologie {
+            Vec::new()
+        } else {
+            s.membran_elemente
+                .iter()
+                .map(|m| {
+                    let idx = m.punkte.map(|q| q as usize);
+                    m.element.hessen([s.x[idx[0]], s.x[idx[1]], s.x[idx[2]]])
+                })
+                .collect()
+        };
         // Das System dieses Unterschritts. Federn der Selbstkollision und der
         // Klebezonen stehen darin; Kontakte folgen unten.
         let mut sys = System {
@@ -760,6 +857,8 @@ impl ImplizitCg {
             kanten,
             naehte,
             biegungen,
+            membran: &s.membran_elemente,
+            membran_h,
             federn: std::mem::take(&mut self.federn),
             rhs: Vec::new(),
             f: Vec::new(),
@@ -984,6 +1083,9 @@ mod tests {
             faser: Vec::new(),
             faser_ersatz: 0,
             faser_entartet: 0,
+            membran_entartet: 0,
+            membran_kante: Vec::new(),
+            membran_elemente: Vec::new(),
             teile: Vec::new(),
             naht_biegung_ohne: 0,
             einhalte_kanten: 0,

@@ -22,7 +22,7 @@ not contain code from CLO or Seamly2D.
 |---|---|---|
 | Stretch | low | very high, often > 200 % |
 | Bending stiffness | noticeable | very low |
-| Poisson ratio | low | close to 0.5 (nearly incompressible) |
+| Poisson ratio | low | ≈ 0 in the sheet: the measured profile has shear = stretch/2, so `ν = E/(2G) − 1` ≈ 0 |
 | Thickness | 0.3–1 mm | 0.3–0.8 mm |
 | Surface | matte | glossy, slightly tacky |
 
