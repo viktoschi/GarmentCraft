@@ -49,6 +49,7 @@ pub mod gpu;
 pub mod implizit;
 pub mod klebung;
 pub mod koerper;
+pub mod kontinuum;
 pub mod material;
 pub mod messung;
 pub mod nahtlage;

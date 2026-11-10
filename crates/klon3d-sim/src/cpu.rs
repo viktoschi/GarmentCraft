@@ -100,6 +100,11 @@ impl CpuReferenz {
         }
         for f in s.abstand.farben.clone() {
             for c in f {
+                // Carried by a membrane: its stiffness lives in the triangle,
+                // counted below ([`Szene::membran_kante`]).
+                if s.membran_kante.get(c).copied().unwrap_or(false) {
+                    continue;
+                }
                 let [i, j] = s.abstand.punkte[c].map(|p| p as usize);
                 let d = add(sub(s.x[j], s.x[i]), sub(self.delta[j], self.delta[i]));
                 let l = norm(d);
@@ -109,6 +114,19 @@ impl CpuReferenz {
                     self.last[i] = add(self.last[i], f_ij);
                     self.last[j] = sub(self.last[j], f_ij);
                 }
+            }
+        }
+        // Membranes: what the fabric pulls with, tension only.
+        for m in &s.membran_elemente {
+            let idx = m.punkte.map(|p| p as usize);
+            let p = [
+                add(add(s.x[idx[0]], self.delta[idx[0]]), self.korr[idx[0]]),
+                add(add(s.x[idx[1]], self.delta[idx[1]]), self.korr[idx[1]]),
+                add(add(s.x[idx[2]], self.delta[idx[2]]), self.korr[idx[2]]),
+            ];
+            let fz = m.element.krafte_zug(p);
+            for k in 0..3 {
+                self.last[idx[k]] = add(self.last[idx[k]], fz[k]);
             }
         }
         // Vorhersage.
@@ -123,7 +141,38 @@ impl CpuReferenz {
         let (x, d) = (&s.x, &self.delta);
         for f in s.abstand.farben.clone() {
             for c in f {
+                if s.membran_kante.get(c).copied().unwrap_or(false) {
+                    continue;
+                }
                 abstand(x, d, &mut self.korr, &s.w, s.abstand.punkte[c], s.abstand.ruhe[c], s.abstand.nachgiebigkeit[c] / h2);
+            }
+        }
+        // Membranes: three scalar constraints per triangle (warp strain, weft
+        // strain, shear). They share no point with a distance constraint, so
+        // the pass is safe next to the coloured groups; one after the other is
+        // the Gauss–Seidel order.
+        for m in &s.membran_elemente {
+            let idx = m.punkte.map(|p| p as usize);
+            let p = [
+                add(add(x[idx[0]], d[idx[0]]), self.korr[idx[0]]),
+                add(add(x[idx[1]], d[idx[1]]), self.korr[idx[1]]),
+                add(add(x[idx[2]], d[idx[2]]), self.korr[idx[2]]),
+            ];
+            for zug in m.element.zuege(p) {
+                if !zug.alpha.is_finite() {
+                    continue;
+                }
+                let mut wsum = zug.alpha / h2;
+                for k in 0..3 {
+                    wsum += s.w[idx[k]] * dot(zug.grad[k], zug.grad[k]);
+                }
+                if !(wsum > 0.0) {
+                    continue;
+                }
+                let dl = -zug.c / wsum;
+                for k in 0..3 {
+                    self.korr[idx[k]] = add(self.korr[idx[k]], mul(zug.grad[k], s.w[idx[k]] * dl));
+                }
             }
         }
         for f in s.naht.farben.clone() {

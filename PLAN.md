@@ -2,7 +2,7 @@
 
 Decision of 2026-10-18: **entirely in Rust**, without Blender at runtime.
 
-**Status: 2026-11-02.** Stages 0 and 1 are done, stage 2 done — including the
+**Status: 2026-11-10.** Stages 0 and 1 are done, stage 2 done — including the
 silhouette check (finding 24, `klon3d-koerper/src/silhouette.rs`) and the
 post-shaping between waist and hip (finding 124, `nachformung.rs`, beyond the
 reference program) — stage 6
@@ -22,6 +22,15 @@ onto it (4c largely done, findings 95, 96: 98.6% of seam pairs closed); with Blu
 the same chain also dresses other patterns without per-pattern tuning, and everything holds by tension (finding 98:
 99.4 / 99.1 / 94.6%). Findings 17–24 changed the foundations of stages 2
 and 3 — they are incorporated below.
+
+Since 2026-11-10 the solver carries the fabric as a **triangle continuum** (#127):
+warp stretch, weft stretch and shear are three independent inputs from the `.zfab`,
+and Poisson's ratio follows from E and G instead of being assumed. The edge springs
+stay as the rest-length carrier but no longer set the stiffness. What that changes
+and what it costs is in "The continuum replaced the edge springs" (stage 4). One
+regression comes with it: the ease of #109 no longer works, because a shortened rest
+length is a tensile pre-strain in a membrane, not slack as in a spring (details
+there).
 
 Since 2026-10-31 the placement puts the collar on the **slanted** neck seam
 (finding 121): the seam is not a horizontal circle but runs from 1.3161 m at
@@ -454,25 +463,90 @@ stiffness of the piece's own stiffest. With the cap the flat scene settles to
 0.006 m/s over 180 frames on the default solver. Still open: anisotropic material,
 self-collision of the band and the layers.
 
-**What the fold does to the acceptance numbers of `bluse2_stehend`** (release, same
-machine): the scene grows from 6 022 to 11 752 points and takes 1 818 s instead of
-450 s, resting speed 0.0008 m/s, deepest point +0.20 mm, 768 of 770 seam pairs within
-10 mm, nothing sinks - all four still pass. Faults 1, 3 and 4 stay above their floors
-(plunge at the bust +48.3 mm, shoulder blade +5.87 pp, sleeve +4.87 %). **Fault 5 does
-not**: the collar's free upper edge comes from 8.9 to 2.1 mm off the skin and its ends
-from 33.0 to 5.2 mm, against a floor of 10 mm. The band does not commit a fault here -
-the two collar halves gain 7.8 % and 7.6 % of their own mass, in line with the other
-pieces (+9.0 % front side, +9.7 % back side) - but a stand-up collar of 5 mm fabric
-holds itself up by bending alone, nothing is pinned, and the doubled layer at its free
-top edge is enough to let it fall against the neck. A real collar is glued or
-overlocked flat there; the band is the strip `Teilnetz::zugabe` built, a second layer
-that stands free. That is a limit of the model, not of the solver, and the test keeps
-its floor and fails on it.
+**What the fold did to the acceptance numbers of `bluse2_stehend`** (release, same
+machine, measured at #123): the scene grows from 6 022 to 11 752 points and takes
+1 818 s instead of 450 s, resting speed 0.0008 m/s, deepest point +0.20 mm, 768 of 770
+seam pairs within 10 mm, nothing sinks - all four still pass. Faults 1, 3 and 4 stay
+above their floors (plunge at the bust +48.3 mm, shoulder blade +5.87 pp, sleeve
++4.87 %). **Fault 5 did not**: the collar's free upper edge came from 8.9 to 2.1 mm
+off the skin and its ends from 33.0 to 5.2 mm, against a floor of 10 mm. The band does
+not commit a fault here - the two collar halves gain 7.8 % and 7.6 % of their own
+mass, in line with the other pieces (+9.0 % front side, +9.7 % back side) - but a
+stand-up collar of 5 mm fabric holds itself up by bending alone, nothing is pinned,
+and the doubled layer at its free top edge was enough to let it fall against the neck.
+A real collar is glued or overlocked flat there; the band is the strip
+`Teilnetz::zugabe` built, a second layer that stands free. That was a limit of the
+model, not of the solver, and the test kept its floor and failed on it.
+**Superseded by #127**: with the continuum the same test, floor and fold pass, see
+"What the continuum does to these numbers" below.
 
 `bluse2_stehend_einhalte` passes with the fold (release, 2 892 s): cap air median 0.6 /
 0.9 mm, 99.6 / 99.9 % of the seam pairs within 10 mm, resting speed 0.0007 / 0.0006 m/s,
 deepest point +0.20 mm, and the ease switch still relieves the armhole side (10.23 pp)
-more than the cap side (1.61 pp).
+more than the cap side (1.61 pp). **Under #127 it fails** — see below.
+
+**What the continuum does to these numbers** (release, same machine, fold on, all
+floors untouched): `bluse2_stehend` **passes all five faults and still passes** —
+2 331 s instead of 1 818 s. Resting speed 0.0009 m/s, deepest point +0.20 mm, seam
+pairs 769 of 770 within 10 mm (99.9 %, was 768), nothing sinks. Faults 1, 3 and 4
+stay above their floors and move little (plunge at the bust +46.0 mm against
++48.3, shoulder blade +6.96 pp against +5.87, sleeve +4.57 % against +4.87). The
+sleeve cap still does not stand off (0.9 mm median air) — expected, the seam list
+equalises the lengths.
+
+**Fault 5 now passes**: the collar's free upper edge is 5.5 mm off the skin
+(2.1 before) and its ends 43.9 mm (5.2 before), against a floor of 10 mm. It is
+the one number that moves by an order of magnitude. What is certain is that the
+stiffness formulation is the only thing that changed between the two runs - same
+test, same floors, same fold, same pattern. What is **not** measured is which of
+the three inputs does it: the plausible mechanism is shear, because the fold broke
+the fault under a net with `ν = 1/3` (`G = 0.375·E`) and the membrane carries
+latex's real `G = E/2`, about a third more resistance to a collar that folds over -
+but a run with `schub_n_m` set to `0.375·E` and everything else equal would be
+needed to prove it, and that is another 39-minute acceptance run for an
+attribution the issue does not ask for. So: the fault is restored, the reason is a
+plausibility, not a measurement.
+
+The honest reading: one acceptance number that was a documented model limit of the
+fold is now a passing fault, and every other number stays where it was. What is not
+claimed is that the collar now behaves — 43.9 mm at the ends is a large stand-off
+and the floor of 10 mm is a low bar.
+
+**`bluse2_stehend_einhalte` fails one of its assertions** (release, fold on,
+4 718 s instead of 2 892 s). The reported number — air under the cap — is flat:
+median 1.9 mm without the ease switch and 1.2 mm with it (0.6 / 0.9 before), 99.9 %
+of the seam pairs within 10 mm in both runs. What broke is the sentence that makes
+that number meaningful: the ease switch no longer relieves the armhole side. The cap
+side stretches 0.31 pp less with the switch, the armhole side **2.26 pp more**
+(before: 1.61 and 10.23 pp less), so the armhole side goes from +21.44 % to +23.70 %
+of its pattern length instead of dropping. The test asserts `armloch_pp > kappe_pp`
+and fails.
+
+This is not lost data: the eased rest lengths do reach the membranes. A diagnostic
+built the copy both ways and compared each membrane's rest area with its pattern
+triangle — 520 edges shorten, 286 of 10 302 triangles change, and exactly the two
+sleeve pieces lose 0.0877 % of rest area (the armhole side of the seam lies on the
+back pieces, which move by 0.004 %). The membrane sees the ease.
+
+The cause is the formulation, and it is the one place where the continuum is
+strictly *less* like cloth: **a shorter rest length is a tensile pre-strain, not
+slack.** The eased rest triangle sits underneath material that is still at the
+pattern positions, so its warp strain rises from −0.00385 to −0.00233 — the ease
+adds 0.0015 of pull to the sleeve, where a shortened distance spring would simply
+stop carrying force. Gathering therefore costs compression work that the cap cannot
+do: it stays within 1.3 mm of its pattern length (476.8 → 475.5 mm sewn) instead of
+furling, and the seam springs pull the surplus out of the armhole side, which goes
+from +21.44 % to +23.70 % of its pattern length. Gathering needs the opposite —
+fabric that goes slack and buckles — and the element has no compressive buckling (a
+wrinkled sheet is a nonlinear, out-of-plane instability). #127 asks for a continuum
+with three stiffnesses, not for a wrinkling model, so none was added.
+
+Left as is: no floor, assertion, pattern or switch touched — that is the rule. The
+failure is a property of #109 that the continuum breaks, recorded here and in the
+issue. If the ease is to keep working, the element needs a compressive branch that
+gives way (a compression-only cut-off on the strain energy, no tensile stress below
+zero and no compressive stress above it — at the price of a nonsmooth energy that the
+tangent has to handle); that is a task of its own.
 
 Three decisions live in `saumkontur.rs` and are assumptions, not findings:
 
@@ -530,7 +604,7 @@ includes **motion** (stage 7), and that needs the computing power of the GPU.
 | **4a′ Tube, implicit with CG like CLO (CPU reference, basis)** | second computation path `ImplizitCg` in `klon3d-sim`: backward Euler, matrix-free PCG with 3×3 diagonal blocks, contact filter, normal force from the system, Coulomb friction, warm start; CLO setting of 1 step per frame, 50 CG iterations, seam spring 500 N/m | **done** (finding 35): tube, both fabrics at 5.5/10%, with the same acceptance as 4a, slip test at most 1.6% off the discrete path; frictionless, the same equilibrium as XPBD; blouse 13–137 ms per frame instead of 1.2–4 s, on the GPU around 310 instead of 140,000 dispatches per frame. Limits: a stiff seam only just converges, loose pieces come to rest poorly with 50 iterations. The basis since ADR-020 |
 | **Substeps per frame** | `schritte_je_bild` in `ImplizitParameter` | **done**: default 5, matching the `Nonlinear` preset (residual 1e-5). With one substep a 5.5% Radical band on the reference body does not settle and sits 2-4% off the tape-measure circumference; the error falls monotonically with the substep count (0.06% at five) |
 | **Body as collision body** (before 4c) | body from `klon3d koerper` as a mesh in `klon3d-sim` (`netzkoerper.rs`, `Koerper::Netz`): signed distance via the nearest point and angle-weighted pseudonormals, grid search (20 mm cells, 10 mm search depth), in the implicit step a penetration check along the path with Coulomb friction on the impact. Test cases: tube on a cylinder mesh, band around the waist, point rain | **done** (finding 94): tube on the mesh, ε within 0.002 pp of the analytic case, frictionless the same equilibrium, slip test −0.11/+0.41%; band (10 mm mesh) at rest in all four cases, edges against the tape measure in their plane: Retifist ≤ 0.25%, Radical ≤ 2.7%, no point inside the skin; point rain at 6 m/s 100/100 at the impact location (without the penetration check 10/100). Open: the Radical band in the 5 mm mesh folds and does not come to rest without self-collision; body vertex against cloth triangle; moving body |
-| **4b GPU** | the implicit step from 4a′ as a WGSL compute shader via `wgpu`, `f32` (ADR-020): forces and 3×3 Jacobian blocks per edge, seam and bending, gathered per point via neighbor lists (no atomics); matrix-free A·p, block-Jacobi preconditioner with contact filter, dot products as reductions in a fixed order, warm start; contact, normal force and friction per point; collision and self-collision via spatial hashing. To be settled with 4b (finding 35, section 5): a better preconditioner for stiffer seams and loose pieces; whether edge springs are replaced by a triangle continuum | the same equilibrium as `ImplizitCg` on the tube and on the blouse in a standing pose (define and justify the tolerance), also at body height; slip test as in finding 35; Bluse3 v2 at ≥ 30 frames per second on the RTX 3090. **Partly done** (#27, #29, #33): the solve runs on the GPU and is **2.09× faster than the CPU per solve** on the blouse (5.34 against 11.15 ms, 120 solves after a warm-up, same `cg_max` and tolerance), 1.77× per frame (**38.7 against 68.6 ms**, was 47.3 before #33); on the CLO body 382/278/281 ms per frame against 455/383/423 — still above 33 ms. The operator runs over the whole grid (0.037 against 0.46 ms per pass), the reductions on one workgroup, all passes in one submission; the release pass reuses `Δv` on the device (#33: 43.2 → 37.2 ms, 14 %, and the second solve drops out when no point is held). **30 fps reached with #36:** the system build moved to the device as well, the frame is **27.6–29.1 ms against 33.3** (three runs, 2026-11-02), and `bluse_schafft_30_bilder` runs in the suite. Every record of the device build agrees with the CPU build (`aufbau_wie_cpu`). Still open, each as a change of its own: the solves run into `cg_max` unconverged (the CPU needs **182** iterations to reach 1e-5; every preconditioner tried in #41 lowers iterations only at more operator work, see below), contact queries and self-collision on the GPU, the CLO body (278–382 ms per frame before #36, not measured again), a CPU fallback for small systems such as the tube; GPU tests skip themselves without an adapter and report it |
+| **4b GPU** | the implicit step from 4a′ as a WGSL compute shader via `wgpu`, `f32` (ADR-020): forces and 3×3 Jacobian blocks per edge, seam and bending, gathered per point via neighbor lists (no atomics); matrix-free A·p, block-Jacobi preconditioner with contact filter, dot products as reductions in a fixed order, warm start; contact, normal force and friction per point; collision and self-collision via spatial hashing. To be settled with 4b (finding 35, section 5): a better preconditioner for stiffer seams and loose pieces; whether edge springs are replaced by a triangle continuum — **settled by #127: they are**, for the stretch part; see "The continuum replaced the edge springs" below | the same equilibrium as `ImplizitCg` on the tube and on the blouse in a standing pose (define and justify the tolerance), also at body height; slip test as in finding 35; Bluse3 v2 at ≥ 30 frames per second on the RTX 3090. **Partly done** (#27, #29, #33): the solve runs on the GPU and is **2.09× faster than the CPU per solve** on the blouse (5.34 against 11.15 ms, 120 solves after a warm-up, same `cg_max` and tolerance), 1.77× per frame (**38.7 against 68.6 ms**, was 47.3 before #33); on the CLO body 382/278/281 ms per frame against 455/383/423 — still above 33 ms. The operator runs over the whole grid (0.037 against 0.46 ms per pass), the reductions on one workgroup, all passes in one submission; the release pass reuses `Δv` on the device (#33: 43.2 → 37.2 ms, 14 %, and the second solve drops out when no point is held). **30 fps reached with #36:** the system build moved to the device as well, the frame is **27.6–29.1 ms against 33.3** (three runs, 2026-11-02), and `bluse_schafft_30_bilder` runs in the suite. Every record of the device build agrees with the CPU build (`aufbau_wie_cpu`). **The continuum costs frames (#127):** with one membrane per triangle in the shader (four `vec4` per triangle: indices and rest area, `D⁻¹`, the warp/weft axes, the three stiffnesses; no new dispatch, no ninth storage buffer) eight interleaved runs of `bluse_schafft_30_bilder` on this machine give **29.13 / 28.41 / 27.59 / 29.37 ms** before and **32.18 / 33.14 / 32.74 / 32.09 ms** after, median **28.8 → 32.5 ms**. The bar is 33.3 ms, so the test still passes — with about 0.8 ms of headroom and no longer with 4. Every record of the shader block agrees with the CPU build to 1e-5 (`aufbau_wie_cpu`). A 7-`vec4` layout without recomputing `a3`/`c3` per step measured 36.1–42.8 ms and was reverted; the two constant coefficients now sit in the `Mem` struct once per frame. Still open, each as a change of its own: the solves run into `cg_max` unconverged (the CPU needs **182** iterations to reach 1e-5; every preconditioner tried in #41 lowers iterations only at more operator work, see below), contact queries and self-collision on the GPU, the CLO body (278–382 ms per frame before #36, not measured again), a CPU fallback for small systems such as the tube; GPU tests skip themselves without an adapter and report it |
 | **4c Placement** | place the 2D pieces around the body before sewing. CLO puts them on arrangement points on hull bodies around torso, arms and legs (finding 71, addendum); klon3d needs its own simple approach, e.g. zone and side per piece (in the seam list or a separate file) and cylinders or ellipses from the body measurements of stage 2. Then the seam constraints pull the pieces together. **Built** (`platzierung.rs`, placement file `<pattern>.lage`, `klon3d anziehen`): vertical torso prism from the convex hull of the torso points, around the arm the cross-section hull per centimeter, neck seam with height and radius per angle from the four landmarks (slanted, not a horizontal circle; finding 121); per piece: zone, reference point (also from another piece of the same block), circumferential position in degrees or cm, height at a reference height, `gespiegelt` (mirrored), `drehung` (rotation), `abstand` (offset) | all pieces of Bluse3 v2 lie around the body without penetration, the seams close. **Largely done** (findings 95, 96): all 28 pieces of Bluse3 v2 placed - 16 sewn, 12 glued-on ones on their carrier (`auf <Träger>`/`auf <Träger>:<Punkt>` in the placement file, task #102); dressed with a limited sewing speed (0.1 m/s) and body vertex against cloth triangle during sewing, around the arm a length-preserving arm prism: no point inside the skin, every seam median < 0.8 mm, **98.6% of seam pairs ≤ 10 mm**, 18 of 24 seams fully closed (finding 95 without both: 92.4%). **Generality** (finding 98): Bluse1 v25 and bustier v1 as further test patterns, all three with the same settings — sewn while held (without gravity), cloth points pushed out of the skin beforehand, seam spring 2,000 N/m during dressing, thickness per piece (`dicke` in the placement file), then 2 s of settling and a 10 s hold phase under full gravity (ADR-023): **Bluse3 99.4%, Bluse1 99.1%, bustier 94.6%**, no piece sinks more than 0.4 mm. Finding 100: Bolero v37 96.5% (pleats as darts), skirt v36 95.1% (holds, but not fully at rest: flared panels overlap on the vertical prism); finding 101: seam list and placement **automatic** (`klon3d naehte --vorschlag`, `klon3d lage`); dressed entirely without hand-written files, all five hold (Bluse3 98.6%, Bluse1 98.0%, bustier 96.0%, bolero without sleeves 96.0%, skirt 95.7% — the skirt reacts chaotically to tenths of a millimeter in the initial placement); the placement suggestion lies 0.3–2.8 cm off the hand-made placements. Finding 102: the unrest came from truncated CG solves (50 iterations); with up to 600 iterations during dressing, a torso hull that widens under flared panels, and settling until at rest (2–20 s) before the hold phase: **Bluse3 98.9%, Bluse1 98.9%, bustier 93.6%, bolero 94.5%, skirt 99.2%** with hand-written files, all hold (±0.2 mm), the skirt is insensitive to the initial placement; computing time up to three times longer. Open: corners (sleeve hem, collar end, cup attachments), zones for legs and head, gaps in the pattern reader (`cutArc`, `pointOfIntersectionArcs`, `pointOfIntersectionCurves`, curve names with an underscore) |
 | **4d Test blouse v26 standing** | the whole blouse on the shaped body from `klon3d koerper` | acceptance criterion below; in addition "holds" per ADR-023: after dressing ≥ 10 s of full gravity, no piece sinks more than 5 mm, nothing pinned. **Built** (`klon3d-sim/tests/bluse2_stehend.rs`, task #31): the pattern has no seam list, so `bluse2_v26.naehte` is written by hand — the 16 seams of `klon3d naehte --vorschlag` plus the collar on the neckline (V17), the outer collar on the inner at the fold (V18) and the plunge trim on the plunge edge (V19); the 9 decorative discs are left off on purpose. `bluse2_v26.lage` places 13 of the 22 pieces. Dressed with the settings of 4c (200 frames sewing, settle, 10 s hold), 6 022 points, about 5 min per run, **99.2 % of the seam pairs ≤ 10 mm** (764 of 770), at rest at 0.0002 m/s, **no piece sinks at all**, deepest point +0.20 mm. **Four of the five faults show**: the plunge opening at the bust goes from 130.0 mm flat to 175.3 worn (+45.3); the shoulder blade carries +11.08 % against +5.84 % for the back pieces as a whole (+5.24 pp); the sleeve at armpit height reads +4.94 % (the pattern was cut 4.4 % / 2.2 % too small); the collar's free upper edge stands 31.2 mm off the skin at its two front ends, and the ends are 143.0 mm apart. **The sleeve cap does not stand off** — 0.7 mm median air over the shoulder — because the seam list sews the cap to the armhole at matching lengths (41.5308 against 41.5310 cm), so no excess can lift; on the real garment the stand-off comes from the cap's shape, which a seam list cannot express. The test pins that finding. Open: seams V08/V09/V10/V13/V17 keep one pair each at 20–30 mm (the shoulder corner and the armhole, where the body is not covered by the hull), and the donut and discs are not simulated |
 
@@ -799,6 +873,7 @@ vertex, self-collision on the GPU).
 
 | Constant | Meaning |
 |---|---|
+| Membrane | one per triangle since #127: warp, weft and shear as three independent stiffnesses, ν follows from E and G; replaces the distance spring's stretch force (the spring stays the rest-length carrier) |
 | Distance | distance constraint, stiff for woven fabric, soft for latex |
 | Bending | very low stiffness — latex barely kinks |
 | Volume | for "body hug" (5% reduction) |
@@ -806,6 +881,77 @@ vertex, self-collision on the GPU).
 | Self-collision | as in CLO (finding 116): proximity springs point-triangle and edge-edge up to r₁ + r₂ + 0.04 mm with r = (thickness + additional thickness 2.5 mm)/2, intersections resolved via intersection regions with a constant push, impulse with position correction to 0.1 mm; spatial hashing |
 | Air damping | per material profile |
 | Gluing | points of both layers in a glue zone rigidly coupled; the glued area bends like a plate of the total thickness |
+
+### The continuum replaced the edge springs (#127)
+
+**The defect.** Every stretch constraint up to stage 3 was a distance spring on a
+mesh edge. For any set of such springs the compliance is the same in the two shear
+entries and in the coupling entry, `C₁₂₁₂ ≡ C₁₁₂₂`, so the material has **ν = G/E
+identically** — measured over 20 000 random triangles and spring weights, largest
+deviation 2.2e-16. Latex has `G/E = 174.159/348.274 = 0.5001`, so the net gave
+ν ≈ 0.5 for a sheet whose true ν is ≈ 0. And `fHK`, the shear value the `.zfab`
+states, was never read: G could not be set at all, only inferred.
+
+**The element.** One membrane per triangle, `klon3d-sim/src/kontinuum.rs`. Strain
+energy on the Green strain
+
+```
+U/A₀ = ½·E_k·ε_k² + ½·E_s·ε_s² + 2·G·ε_ks² ,     ε = ½(FᵀF − I),  g = (g₁₁, g₂₂, 2g₁₂)
+```
+
+with `F = [x₁−x₀, x₂−x₀]·D⁻¹` from the current and the rest triangle, the rest
+triangle rebuilt from the **eased** edge lengths of `abstand` (so the reduction and
+the ease of #109 still set the rest shape). The basis is the piece's grainline
+(warp) and its perpendicular (weft), orthonormalised — not edge-based: the first
+version applied `D⁻¹` to the grainline a second time and read a direction as edge
+coefficients, which is invisible on the unit test triangle and wrong by about 12° on
+the 20 × 4 cm test strip. Test 10 (`basis_im_nicht_einheitsdreieck`) is exactly that
+case and fails if the bug comes back.
+
+**Poisson's ratio is derived, not set.** `ν = E/(2G) − 1`; the profile gives
+−0.0001. Nothing in the code carries a Poisson ratio, and `tests/kontinuum.rs` reads
+it back from an affine deformation: `E_eff` 351.8 against 348.3 N/m (−1.0 %),
+`G_eff` 174.159 N/m exactly, weft strain `1.5e-12`, `ν = 1e-12`. An invented
+anisotropic profile (`fSvK ≠ fSuK`) shows the two directions separately, and a
+grainline turned by 90° swaps which stiffness an x-stretch reads.
+
+**The tangent** is the full Hessian — material plus geometric part, the geometric
+one carrying tensile stress only. The 2×2 stress block is **projected onto the PSD
+cone** (Frobenius-nearest); without it the element block went indefinite once sheared
+(λ_min/λ_max −0.744) and the CG diverged. The projection is the identity in every
+tensile state, so the finite-difference exactness survives: on all 10 734 triangles
+of `bluse3_v2` the largest relative error against central differences is 1.36e-3,
+against a global 5.3e-3 that is the deliberate tensile clamp.
+
+**Three routes, one element.** `ImplizitCg` (CPU, the basis), `CpuReferenz` (the
+XPBD cross-check) and the WGSL shader all carry the same block. The shader stores
+four `vec4` per triangle — `(i₀,i₁,i₂,A₀)`, `D⁻¹`, `(warp.xy, weft.xy)`,
+`(E_k,E_s,G)` — one more field in `Params`, no ninth storage buffer, no new
+dispatch. The device build agrees with the CPU to `TOL` 1e-5 (`aufbau_wie_cpu`).
+
+**What it costs.** The tangent of a triangle depends only on the **build**
+positions — the solvers hold the tangent fixed over the iterations of one substep
+— so the per-triangle block is computed once per substep into
+`System::membran_h` and reused by every CG iteration. That is what makes the CPU
+path affordable: on `bluse3_v2` (10 734 triangles) one operator pass `System::mal_h`
+fell from 0.894 to **0.444 ms**, of which the membrane part is 0.275 ms against a
+one-off 0.393 ms build per substep, and `diag()` from 0.98 to 0.65 ms. At frame
+level (`gpu_takt`, release, 50 iterations per solve) the CPU needs **0.456 instead
+of 0.995 ms per iteration** and **143.9 instead of 274.6 ms per frame**; the device
+frame goes from 27.1 to **30.7 ms**, so CPU/GPU drops from 8.9 to 4.7. The old
+worktree (no membrane at all) is 0.221 ms per iteration and 70.2 ms per frame —
+the membrane itself therefore costs about 2×, which is the price of the third
+stiffness, not overhead. `Hessen` is 72 bytes (`f1`, `f2`, the three PSD-projected
+stress scalars) and the material block is applied rank-one (`kg_mal`, three dot
+products and three axpys) so neither a 3×3 matrix nor a 27-entry Jacobian is ever
+formed.
+
+**Coexistence with `abstand`.** The edge springs stay — they remain the rest-length
+carrier (reduction, ease), the source of `roehre::normallast` and the whole XPBD
+constraint set. On an edge whose triangles are both membrane-covered the solver just
+gives them no force: `Szene::membran_kante`, permuted with the coloured groups in
+`Gruppe::geordnet_mit_extra`. Degenerate triangles fall back to the springs
+(`Szene::membran_entartet`); on `bluse3_v2` that is 0 of 10 734.
 
 **Latex material profile:**
 
@@ -1031,6 +1177,25 @@ acceptance at 769 of 770 seam pairs within 10 mm and the lowest point at
 +0.20 mm. The table keeps the 2026-11-01 values as the record; the rerun values
 are within the run-to-run spread of a solve, not a change of the test.
 
+**With the fold (#123) and then the continuum (#127)** the same test runs 11 752
+points and the five faults read (release, floors untouched):
+
+| Fault | #123 fold | #127 continuum | Floor |
+|---|---|---|---|
+| 1 Plunge opening at the bust | +48.3 mm | +46.0 mm | 10 mm |
+| 2 Sleeve cap air | 0.9 mm | 0.9 mm | 10 mm |
+| 3 Shoulder blade | +5.87 pp | +6.96 pp | 2 pp |
+| 4 Sleeve strain | +4.87 % | +4.57 % | 2 % |
+| 5 Collar ends off the skin | 5.2 mm (**failed**) | 43.9 mm | 10 mm |
+
+Fault 5 is the one the fold broke and the continuum restores. The stiffness
+formulation is the only difference between the two runs; **which** of the three
+inputs does it is not measured. Shear is the plausible one - the fold broke the
+fault under a net with `ν = 1/3` (`G = 0.375·E`) and the membrane carries latex's
+real `G = E/2`, a third more resistance to a collar folding over - but proving it
+would need a run with `schub_n_m = 0.375·E` alone. Fault 2 stays "not shown"; that
+reason is geometric and none of this touches it.
+
 Fault 2 is the one that does not appear. `aermelkugel` measures why, on the
 pattern and on the placement:
 
@@ -1236,7 +1401,7 @@ per stage:
 |---|---|---|
 | 1 Pattern reading | grainline per piece: read Seamly2D `<grainline>` (position, rotation), otherwise a fixed piece axis | **done** (`fadenlauf.rs`, #10): visible grainlines only, formula values in the pattern unit, anchored ones normalised into the seam line's box. Carried into the mesh since #88: `Teilnetz::fadenlauf` in mm in the net's own frame, and `klon3d netz --svg` draws the axis with the arrow tips; an unreadable grainline is a message in `Musternetz::fehler`, never a lost piece. `Fadenlauf::richtung()` gives the axis as a 2D unit vector |
 | 3 Mesh | carry the grainline into the mesh (direction per triangle); sewn seam with the seam allowance turned inward instead of an overlap seam; glue zone = fusible interfacing | grainline **done**, seam allowance and glue zone open: `Szene::faser` carries one unit vector per triangle (`klon3d-sim/src/faser.rs`, #106), taken from the piece's axis through the same triangle map the solver uses, so it follows a nonlinear placement - across the piece, not at one point. A piece without a readable grainline takes pattern x and is counted in `Szene::faser_ersatz`; a triangle the placement collapses takes its longest edge and is counted in `Szene::faser_entartet`. Carried data only, nothing reads it while the material stays isotropic. Unequal seam sides since #109: the mesh pairs them at the same arc fraction (it always did), and `Simparameter::einhalteweite` makes the longer side give the surplus — see "Ease in the solver" above. The **cutting line** is in the mesh as data since #117 (`Teilnetz::schnitt`, mm in the net's own frame, empty without an allowance, same `Ecken::Eigen` ring as the export), and since #119 the **strip of triangles** between the seam line and that cutting line (`Teilnetz::zugabe`, `klon3d-mesh/src/zugabe.rs`, outer edge the same ring, positive winding, one anchor per outer point, `klon3d netz` prints its length and triangle count), welded to the piece's boundary points since #121 (`zugabe::verschweisst`: every boundary point is a band vertex at its own coordinates, the split adds no area). Since #123 the strip is folded 180° inwards at the seam line and carried by the scene as fabric of its own (`klon3d_sim::saumfalte`, `Szene::aus_netz_mit_falte`): the pattern points, triangles and seam pairs stay as they are, the band is appended after them with its own mass, stretch springs, a rest-length-0 hold onto the boundary and a 180° bending constraint per fold edge. It is opt-in, so only a scene that asks for it changes; the acceptance numbers below are the ones `bluse2_stehend` reports with the fold. Still open: anisotropic material, self-collision of the band and the layers |
-| 4 Solver | **anisotropic material**: warp, weft and shear separate; for this a **triangle continuum** instead of edge springs (those have ν = 1/3 and no independent shear); noticeable, direction-dependent bending; **self-collision** and layers, because fabric falls into folds | open; edge springs isotropic; self-collision since finding 116 (switch, CPU), layers missing. The direction per triangle is there since #106 (`Szene::faser`), so the material has something to be anisotropic about |
+| 4 Solver | **anisotropic material**: warp, weft and shear separate; for this a **triangle continuum** instead of edge springs (those have ν = 1/3 and no independent shear); noticeable, direction-dependent bending; **self-collision** and layers, because fabric falls into folds | **continuum done** (#127): one membrane per triangle with warp (`fSvK`), weft (`fSuK`) and shear (`fHK`) as three independent stiffnesses, energy `U/A₀ = ½E_kε_k² + ½E_sε_s² + 2Gε_ks²` on Green strain in the triangle's own grainline basis; **ν follows** from E and G (`ν = E/(2G) − 1`), it is set nowhere. The same element on the CPU (`ImplizitCg`), the XPBD cross-check (`CpuReferenz`) and the GPU (WGSL, four `vec4` per triangle). The old edge springs stay in `abstand` as the rest-length source (reduction and the ease of #109) but carry no force on triangles a membrane covers (`Szene::membran_kante`). Acceptance `crates/klon3d-sim/tests/kontinuum.rs`: E and G read back within 5 %, ν = 1e-12, an invented anisotropic profile shows both directions. Open: **direction-dependent bending** (warp/weft/bias bending is still one value), self-collision (switch, CPU, finding 116), layers |
 | Material | `.zfab` reader in Rust, values from CLO's fabric library (ADR-015), no measurements of our own | **read** (`klon3d-pattern/src/zfab.rs`, #83): one reader for both containers, the CLO-fabric mapping lives in `klon3d-pipeline`; `anziehen --material` (#85) and `roehre --material` (#87) pick a `.zfab` by path or by a stem from `assets/stoffe`, through one shared resolution |
 | 5 Inspection output | drape and folds; comparison against CLO with the same fabric, draping and fitted reported separately (already specified) | open |
 

@@ -105,6 +105,7 @@ fn aus_zfab(z: &Zfab, stamm: &str, pfad: &Path) -> Result<Material, Fehler> {
     Ok(Material {
         name: name_static(stamm),
         dehnung_n_m: pflicht(z.stretch_weft_g_s2, "fSuK", pfad)? * 1.0e-3,
+        kette_n_m: pflicht(z.stretch_warp_g_s2, "fSvK", pfad)? * 1.0e-3,
         schub_n_m: pflicht(z.shear_g_s2, "fHK", pfad)? * 1.0e-3,
         biegung_nm: pflicht(z.bending_weft, "fBuK", pfad)? * 1.0e-9,
         flaechengewicht_kg_m2: pflicht(z.dichte_g_mm3, "fDensity", pfad)? * 1.0e3,

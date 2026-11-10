@@ -48,6 +48,7 @@ use klon3d_sim::{ImplizitCg, ImplizitParameter, Rechenweg, Simparameter, Szene, 
 const LAMINAT_08: Material = Material {
     name: "Latex_Laminat_2x0.4mm",
     dehnung_n_m: 696.548,
+    kette_n_m: 696.548,
     schub_n_m: 348.318,
     biegung_nm: 2482.2424e-9 * 8.0,
     flaechengewicht_kg_m2: 0.698,
