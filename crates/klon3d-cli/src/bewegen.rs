@@ -218,8 +218,8 @@ pub fn befehl_bewegen(args: &[String]) -> ExitCode {
     // without `klebt` no spring appears.
     let zonen = p.klebungen(&s).into_iter().map(|(z, _)| z).collect();
     s.klebungen_setzen(zonen);
-    // Provenance of the grainline direction per triangle; it carries no number
-    // while the material stays isotropic.
+    // Provenance of the grainline direction per triangle; no solver term reads
+    // it (the bending takes its direction from the rest triangle, #129).
     println!("{}", crate::fadenlauf::zeile(&p.netz.teile, &s));
 
     let mut rw = if gpu {

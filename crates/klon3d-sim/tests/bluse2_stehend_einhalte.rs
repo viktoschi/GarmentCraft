@@ -67,6 +67,15 @@
 //! side. The numbers and the diagnostic are in `PLAN.md` ("What the continuum does
 //! to these numbers"). The assertion is left as it is: it is a property of #109
 //! that the continuum breaks, not a measurement error.
+//!
+//! **Since #129 it fails an earlier one** (`kappe_pp > 0.0`, line ~438): with the
+//! ease switch both sides of the cap seam now stretch *more* — the cap side
+//! 1.88 pp, the armhole side 4.08 pp — so both sides have the wrong sign. The later
+//! ordering assertion fails as well (−4.08 < −1.88); the run stops at the first
+//! one. The direction-dependent bending of the latex profile (0.17 % between weft
+//! and warp) is enough to reverse the sign of a quantity that was +0.31 pp under
+//! #127. Also left as it is: the floors, the assertions and the pattern are the
+//! acceptance, and a run that moves them is the result, not an error to be patched.
 
 use std::path::PathBuf;
 

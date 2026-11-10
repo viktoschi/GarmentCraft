@@ -11,9 +11,12 @@
 //! That reproduces the nonlinear placement exactly as far as the mesh resolves
 //! it, without sampling the placement again.
 //!
-//! What this module does **not** do is make the material anisotropic: the
-//! solver still builds its springs from one stretch, one shear and one bending
-//! value. [`crate::Szene::faser`] is carried data, ready for stage 4.
+//! What this module does **not** do is make the material anisotropic in the
+//! sense of a pose-dependent direction: [`crate::Szene::faser`] is carried data,
+//! and no solver term reads it. The bending stiffness since #129 takes its
+//! direction from the piece's **rest** triangle ([`crate::biegung`]), not from
+//! this vector - a bending stiffness is a material number and must not follow
+//! the pose.
 
 use klon3d_mesh::Fadenlauf;
 

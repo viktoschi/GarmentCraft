@@ -53,6 +53,12 @@
 //! express. The test pins that finding: if the cap ever lifts, it fails and the
 //! finding has to be re-read.
 //!
+//! Still true with the fold (#123), the continuum (#127) and the direction-
+//! dependent bending (#129): the last run passes all five floors in 1 895.81 s
+//! with the plunge at the bust +42.4 mm, the shoulder blade +6.89 pp, the sleeve
+//! +4.80 % and the collar ends 29.2 mm off the skin, cap air 0.9 mm. The history
+//! of the numbers per stage is in `PLAN.md`.
+//!
 //! The 9 decorative discs (plunge tip, hem, armhole, frog, collar-end halves)
 //! are not sewn on - they are ornaments, they carry no load, and leaving them
 //! off keeps them from blocking collisions. The seam list says so.

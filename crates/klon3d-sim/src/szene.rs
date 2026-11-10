@@ -19,7 +19,10 @@
 //!   gleichseitigen Netz genau `k = √3/2 · K`. Nachgiebigkeit α = 1/k.
 //! * **Biegung:** ein Winkel-Constraint je innerer Kante (vorzeichenbehafteter
 //!   Diederwinkel, Ruhewinkel 0 — der Schnitt ist eben). Steifigkeit aus der
-//!   Plattensteifigkeit D: `k = D · L² / (A₁ + A₂)`. Für ein gleichseitiges
+//!   Plattensteifigkeit D: `k = D · L² / (A₁ + A₂)`. D hängt seit #129 von der
+//!   Richtung ab ([`crate::biegung`]): die Krümmung läuft quer zur Kante, ihr
+//!   Winkel gegen den Fadenlauf im **Ruhezustand** des Teils wählt zwischen
+//!   Schuss, Kette und Schräge. Für ein gleichseitiges
 //!   Netz auf einem Zylinder ist der Diederwinkel θ = L·(3κ⊥ − κ∥)/(2√3),
 //!   über die drei Kantenrichtungen gemittelt θ² = κ²L²/4; mit diesem k gibt
 //!   das genau die Biegeenergie D/2·κ² je Fläche (Test
@@ -211,8 +214,10 @@ pub struct Szene {
     pub ruhe_inv: Vec<[f64; 4]>,
     /// Material direction per triangle: a unit vector in the triangle's own
     /// plane, derived from the piece's grainline through the placement
-    /// (`lage`). Same length as [`Szene::dreiecke`]. Only data for now - the
-    /// material is isotropic, so nothing reads it yet (stage 4).
+    /// (`lage`). Same length as [`Szene::dreiecke`]. Carried data, not read by
+    /// the solver: the membrane takes its rest basis from the pattern triangle
+    /// and the bending its direction from the piece's rest axis (`biegung.rs`,
+    /// #129), both of which are material frames rather than pose frames.
     pub faser: Vec<[f64; 3]>,
     /// Pieces that had to be given the substitute axis (pattern x) because the
     /// pattern has no readable grainline for them.
@@ -424,7 +429,27 @@ impl Szene {
                     let (pi, pj) = (p_m[i as usize], p_m[j as usize]);
                     let (o_a, o_b) = if flaeche(pi, pj, p_m[o1 as usize]) > 0.0 { (o1, o2) } else { (o2, o1) };
                     let a12 = flaeche(pi, pj, p_m[o_a as usize]).abs() + flaeche(pj, pi, p_m[o_b as usize]).abs();
-                    let kb = vg.material.biegung_nm * l * l / a12;
+                    // The stiffness follows the direction, not the edge: a
+                    // bending constraint folds the two triangles *around* this
+                    // edge, so its curvature runs across it. The angle is taken
+                    // in the piece's **rest** plane - a bending stiffness is a
+                    // material number and must not follow the pose. An edge or a
+                    // grainline of no length falls back to the weft value; the
+                    // same holds for an isotropic fabric, where the three
+                    // values are equal and `steifigkeit_aus` returns the number
+                    // bit for bit.
+                    let d = crate::biegung::cos2_sin2([pj[0] - pi[0], pj[1] - pi[1]], dir2)
+                        .map(|(c2, s2)| {
+                            crate::biegung::steifigkeit_aus(
+                                c2,
+                                s2,
+                                vg.material.biegung_nm,
+                                vg.material.biegung_kette_nm,
+                                vg.material.biegung_schraege_nm,
+                            )
+                        })
+                        .unwrap_or(vg.material.biegung_nm);
+                    let kb = d * l * l / a12;
                     b_p.push([i + off as u32, j + off as u32, o_a + off as u32, o_b + off as u32]);
                     b_r.push(0.0);
                     b_a.push(1.0 / kb);
@@ -443,6 +468,11 @@ impl Szene {
             dir2_je_teil.push(dir2);
             skala_je_teil.push(skala);
             kanten_index_je_teil.push(kanten_e);
+            // Per piece, for the seam hinge below: this stays the **weft**
+            // value on purpose. A seam hinge joins two pieces that can have
+            // different grainlines, and it has no direction of its own that both
+            // sides agree on - so a directional value here would be an average
+            // of two frames, not a measurement. Left as it was (#129).
             biegesteif.push(vg.material.biegung_nm);
             teile.push(Teilinfo {
                 name: t.teil.clone(),

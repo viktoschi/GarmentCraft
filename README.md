@@ -27,8 +27,8 @@ not contain code from CLO or Seamly2D.
 | Surface | matte | glossy, slightly tacky |
 
 That calls for different stiffnesses in the solver and its own contact handling. Latex was the first test
-case; textiles are an equal goal and need anisotropic material with grain direction, separate shear
-stiffness and self-collision (see [PLAN.md](PLAN.md)).
+case; textiles are an equal goal and need the direction of the grain in every stiffness, not only in
+stretch and shear — bending follows it since #129, self-collision is still open (see [PLAN.md](PLAN.md)).
 
 ## Status
 

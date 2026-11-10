@@ -1,11 +1,13 @@
 //! One report line for the grainline direction per triangle
 //! ([`klon3d_sim::Szene::faser`]), shared by `anziehen` and `bewegen`.
 //!
-//! The direction is computed and carried, but nothing reads it yet: the material
-//! is isotropic, so it changes no number. What the line has to say is therefore
-//! its **provenance** - how many pieces brought a readable grainline, which ones
-//! fell back to the substitute axis, and how many triangles had no plane left.
-//! A substitute that stays silent would read like a measurement.
+//! The direction is computed and carried, and no solver term reads it: the
+//! membrane takes its rest basis from the pattern triangle and the bending its
+//! direction from the piece's rest axis ([`klon3d_sim::biegung`]), because a
+//! material number must not follow the pose. What the line has to say is
+//! therefore its **provenance** - how many pieces brought a readable grainline,
+//! which ones fell back to the substitute axis, and how many triangles had no
+//! plane left. A substitute that stays silent would read like a measurement.
 
 use klon3d_mesh::Teilnetz;
 use klon3d_sim::Szene;

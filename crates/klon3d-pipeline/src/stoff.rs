@@ -15,8 +15,11 @@
 //! | field | unit in the file | [`Material`] | factor |
 //! |---|---|---|---|
 //! | `fSuK` (Stretch weft) | g/s² = mN/m | `dehnung_n_m` (N/m) | 1e-3 |
+//! | `fSvK` (Stretch warp) | g/s² | `kette_n_m` (N/m) | 1e-3 |
 //! | `fHK` (Shear) | g/s² | `schub_n_m` (N/m) | 1e-3 |
 //! | `fBuK` (Bending weft) | g·mm²/s²/rad | `biegung_nm` (N·m) | 1e-9 |
+//! | `fBvK` (Bending warp) | g·mm²/s²/rad | `biegung_kette_nm` (N·m) | 1e-9 |
+//! | `fBhK` (Bending bias) | g·mm²/s²/rad | `biegung_schraege_nm` (N·m) | 1e-9 |
 //! | `fDensity` | g/mm² | `flaechengewicht_kg_m2` | 1e+3 |
 //! | `fThickness` | mm | `dicke_m` (m) | 1e-3 |
 //! | `fFriction` | – | `reibung` | 1 |
@@ -26,6 +29,12 @@
 //! `fBuK` 2 482.24 against `fBvK`/`fBhK` 2 486.49 at 0.4 mm). The built-in
 //! profile `RADICAL_RUBBER_04` carries the weft values, so the weft is what
 //! keeps the round trip exact. Nothing is averaged.
+//!
+//! Since #129 the two other bending directions reach the solver as well
+//! ([`Material::biegung_kette_nm`], [`Material::biegung_schraege_nm`]) and
+//! [`klon3d_sim::biegung`] interpolates between the three. `biegung_nm` stays
+//! the **weft** value, so every caller without a grainline keeps the number it
+//! had.
 //!
 //! [`MATERIAL.md`]: ../../../MATERIAL.md
 
@@ -102,12 +111,21 @@ fn aus_bytes(daten: &[u8], stamm: &str, pfad: &Path) -> Result<Material, Fehler>
 /// Every value is demanded: a file that does not state its thickness is an
 /// error naming the field, not a material with a zero in it.
 fn aus_zfab(z: &Zfab, stamm: &str, pfad: &Path) -> Result<Material, Fehler> {
+    // The weft bending is the one value the material cannot do without, so it
+    // is read once and the other two directions fall back to it.
+    let biegung_weft = pflicht(z.bending_weft, "fBuK", pfad)?;
     Ok(Material {
         name: name_static(stamm),
         dehnung_n_m: pflicht(z.stretch_weft_g_s2, "fSuK", pfad)? * 1.0e-3,
         kette_n_m: pflicht(z.stretch_warp_g_s2, "fSvK", pfad)? * 1.0e-3,
         schub_n_m: pflicht(z.shear_g_s2, "fHK", pfad)? * 1.0e-3,
-        biegung_nm: pflicht(z.bending_weft, "fBuK", pfad)? * 1.0e-9,
+        biegung_nm: biegung_weft * 1.0e-9,
+        // Stated by every one of the eight files, but not demanded: a file that
+        // gives only the weft bending is an isotropic fabric, and inventing an
+        // error for it would refuse a usable material. `fBuK` above stays the
+        // field that must be there.
+        biegung_kette_nm: z.bending_warp.unwrap_or(biegung_weft) * 1.0e-9,
+        biegung_schraege_nm: z.bending_bias.unwrap_or(biegung_weft) * 1.0e-9,
         flaechengewicht_kg_m2: pflicht(z.dichte_g_mm3, "fDensity", pfad)? * 1.0e3,
         dicke_m: pflicht(z.dicke_mm, "fThickness", pfad)? * 1.0e-3,
         reibung: pflicht(z.reibung, "fFriction", pfad)?,
