@@ -501,6 +501,20 @@ pub struct Stoff {
     /// Name des Physikprofils (`qsPhysicalPropertyName`), z. B.
     /// `Latex_0.4mm_Radical_Rubber`.
     pub profil: Option<String>,
+    /// Biegesteifigkeit **in Schussrichtung** (`mapPhysical.fBuK`) in
+    /// g·mm²/s²/rad, so wie CLO sie speichert - die Umrechnung nach N·m macht
+    /// der Aufrufer (`× 10⁻⁹`).
+    ///
+    /// Bis #131 las der Projektleser nur Dicke, Gewicht und Profilname: ein
+    /// `.zprj` konnte damit nicht richtungsabhängig rechnen, obwohl der Solver
+    /// es seit #129 kann. `None`, wenn das Feld fehlt oder keine f32 ist - die
+    /// drei Biegewerte sind kein Pflichtfeld, ein Projekt mit fehlendem
+    /// `mapPhysical` bleibt lesbar.
+    pub biegung_schuss: Option<f64>,
+    /// `fBvK` - Biegung in Kettrichtung, gleiche Einheit.
+    pub biegung_kette: Option<f64>,
+    /// `fBhK` - Biegung unter 45°, gleiche Einheit.
+    pub biegung_schraege: Option<f64>,
 }
 
 // ─────────────────────────────────────────────────────── Lesen ──
@@ -831,6 +845,9 @@ fn lies_stoffe(wurzel: &Map) -> Result<Vec<Stoff>, ZprjFehler> {
                     .and_then(|p| komma(p, "fDensity"))
                     .map(|d| d * 1.0e6),
                 profil: physik.and_then(|p| text(p, "qsPhysicalPropertyName")),
+                biegung_schuss: physik.and_then(|p| komma(p, "fBuK")),
+                biegung_kette: physik.and_then(|p| komma(p, "fBvK")),
+                biegung_schraege: physik.and_then(|p| komma(p, "fBhK")),
             }
         })
         .collect())

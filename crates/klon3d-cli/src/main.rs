@@ -2240,6 +2240,26 @@ fn befehl_zprj(args: &[String]) -> ExitCode {
                     .map(|g| format!("{g:.0}"))
                     .unwrap_or_else(|| "?".into())
             );
+            // The three bending values in CLO's own unit, and how far they
+            // spread: the number that says whether a fabric can bend
+            // direction-dependent at all. `-` when the project does not state
+            // them, which is a different statement from "equal".
+            let b = [s.biegung_schuss, s.biegung_kette, s.biegung_schraege];
+            match (b[0], b[1], b[2]) {
+                (Some(schuss), Some(kette), Some(schraege)) => {
+                    let klein = schuss.min(kette).min(schraege);
+                    let gross = schuss.max(kette).max(schraege);
+                    let streuung = if klein > 0.0 {
+                        format!("{:.2} %", (gross / klein - 1.0) * 100.0)
+                    } else {
+                        "-".into()
+                    };
+                    println!(
+                        "      Biegung Schuss/Kette/Schraege {schuss:.2} / {kette:.2} / {schraege:.2}  (Spanne {streuung})"
+                    );
+                }
+                _ => println!("      Biegung Schuss/Kette/Schraege -"),
+            }
         }
     }
 
