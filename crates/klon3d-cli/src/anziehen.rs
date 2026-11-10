@@ -299,10 +299,11 @@ pub fn befehl_anziehen(args: &[String]) -> ExitCode {
     let naht_nachgiebigkeit = if xpbd { 1.0 / ablauf.naht_k } else { 0.0 };
     let param = Simparameter { naht_nachgiebigkeit, ..pipeline::standard_simparameter() };
     let mut s = pipeline::szene_aus(&p, &geladen, material, 0.0, param);
-    // Der Fadenlauf je Dreieck ist berechnet, aber noch nicht wirksam: das
-    // Material ist isotrop. Die Zeile nennt deshalb nur die Herkunft - wie viele
-    // Teile ihren Fadenlauf aus dem Muster haben, welche die Ersatzachse
-    // bekommen, und wie viele Dreiecke gar keine Fläche mehr haben.
+    // Der Fadenlauf je Dreieck ist berechnet, aber von keiner Solver-Groesse
+    // gelesen: Membran und Biegung nehmen ihre Richtung aus dem Ruhezustand des
+    // Teils, nicht aus der Pose (#127, #129). Die Zeile nennt deshalb die
+    // Herkunft - wie viele Teile ihren Fadenlauf aus dem Muster haben, welche die
+    // Ersatzachse bekommen, und wie viele Dreiecke gar keine Fläche mehr haben.
     println!("{}", crate::fadenlauf::zeile(&p.netz.teile, &s));
     if xpbd {
         s.param.unterschritte = s.unterschritte_weich(WEICH_FAKTOR);

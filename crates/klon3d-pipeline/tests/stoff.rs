@@ -105,6 +105,11 @@ fn rundlauf_radical_rubber() {
     assert_eq!(m.dehnung_n_m, 348_274.16f32 as f64 * 1.0e-3);
     assert_eq!(m.schub_n_m, 174_159.05f32 as f64 * 1.0e-3);
     assert_eq!(m.biegung_nm, 2_482.242_4f32 as f64 * 1.0e-9);
+    // The other two directions, from `fBvK`/`fBhK`. They are not demanded by
+    // the reader (a file that gives only `fBuK` is an isotropic fabric), so the
+    // built-in profile is the case that proves they are actually read.
+    assert_eq!(m.biegung_kette_nm, 2_486.492_4f32 as f64 * 1.0e-9);
+    assert_eq!(m.biegung_schraege_nm, 2_486.492_4f32 as f64 * 1.0e-9);
     assert_eq!(m.flaechengewicht_kg_m2, 0.000_348_989_88f32 as f64 * 1.0e3);
     assert_eq!(m.dicke_m, 0.4f32 as f64 * 1.0e-3);
     assert_eq!(m.reibung, 0.03f32 as f64);
@@ -120,6 +125,8 @@ fn alle_acht_stoffe_laden() {
             ("dehnung", m.dehnung_n_m),
             ("schub", m.schub_n_m),
             ("biegung", m.biegung_nm),
+            ("biegung kette", m.biegung_kette_nm),
+            ("biegung schraege", m.biegung_schraege_nm),
             ("flaechengewicht", m.flaechengewicht_kg_m2),
             ("dicke", m.dicke_m),
         ] {
@@ -129,6 +136,116 @@ fn alle_acht_stoffe_laden() {
             m.reibung > 0.0 && m.reibung < 1.0,
             "{stamm}: reibung {}",
             m.reibung
+        );
+    }
+}
+
+/// The bending stiffness in **three** directions, as the files state them
+/// (`fBuK` weft, `fBvK` warp, `fBhK` bias), in g·mm²/s² → N·m.
+///
+/// The numbers are the ones in `latex_profile.csv`, read in
+/// `klon3d-pattern/tests/zfab.rs`; they are repeated here because this crate is
+/// the one that turns them into a `Material`, and a wrong factor or a swapped
+/// field would otherwise only show up as a slightly wrong scene.
+///
+/// All eight files state `warp == bias` and a weft 0.17 % softer, so this is
+/// also the assertion that the soft direction is the one the solver used before
+/// #129 - the weft.
+const BIEGUNG: [(&str, f64, f64, f64); 8] = [
+    ("Latex_0.25mm_abgeleitet", 606.0162, 607.0538, 607.0538),
+    ("Latex_0.4mm_Radical_Rubber", 2482.2424, 2486.4924, 2486.4924),
+    ("Latex_1.0mm_abgeleitet", 38785.0352, 38851.4414, 38851.4414),
+    (
+        "Latex_Laminat_0.4+0.25mm_abgeleitet",
+        10651.3408,
+        10669.5771,
+        10669.5771,
+    ),
+    (
+        "Latex_Laminat_2x0.25mm_abgeleitet",
+        4848.1294,
+        4856.4302,
+        4856.4302,
+    ),
+    (
+        "Latex_Laminat_2x0.4mm_abgeleitet",
+        19857.9395,
+        19891.9395,
+        19891.9395,
+    ),
+    (
+        "Latex_Laminat_2x1.0mm_abgeleitet",
+        310280.2812,
+        310811.5312,
+        310811.5312,
+    ),
+    (
+        "Latex_Laminat_3x0.4mm_abgeleitet",
+        67020.5391,
+        67135.2891,
+        67135.2891,
+    ),
+];
+
+/// The three bending values survive the mapping, the weft is the soft one, and
+/// no angle of the fabric makes it softer than the weft or stiffer than
+/// +0.193 % above it.
+///
+/// That upper bound is what the change can cost a scene: the tensor rotation
+/// bulges above both ends at 30°, measured +0.1926 % on these eight files. If a
+/// file ever gets a genuinely soft diagonal the bound moves - the formula is
+/// right, it is this *set of files* that stays inside the interval.
+#[test]
+fn biegerichtung_der_acht_stoffe() {
+    for (stamm, weft, warp, bias) in BIEGUNG {
+        let m = stoff_laden(&datei(stamm)).unwrap_or_else(|e| panic!("{stamm}: {e}"));
+
+        // The same factor as the round-trip test above, applied to all three.
+        for (was, ist, soll) in [
+            ("Schuss", m.biegung_nm, weft),
+            ("Kette", m.biegung_kette_nm, warp),
+            ("Schraege", m.biegung_schraege_nm, bias),
+        ] {
+            let erwartet = soll as f32 as f64 * 1.0e-9;
+            assert_eq!(ist, erwartet, "{stamm}: {was} {ist:e} gegen {erwartet:e}");
+        }
+
+        assert!(m.biegung_nm > 0.0, "{stamm}");
+        assert!(m.biegung_kette_nm > 0.0, "{stamm}");
+        assert!(m.biegung_schraege_nm > 0.0, "{stamm}");
+        assert!(
+            m.biegung_nm <= m.biegung_kette_nm && m.biegung_nm <= m.biegung_schraege_nm,
+            "{stamm}: der Schuss ist nicht mehr die weiche Richtung"
+        );
+        assert_eq!(
+            m.biegung_kette_nm, m.biegung_schraege_nm,
+            "{stamm}: die Dateien nennen Kette und Schraege gleich"
+        );
+
+        // The whole circle of directions, against the weft the solver used
+        // before this change.
+        let (mut min, mut max) = (f64::INFINITY, f64::NEG_INFINITY);
+        for i in 0..=3600 {
+            let theta = i as f64 * std::f64::consts::FRAC_PI_2 / 3600.0;
+            let d = klon3d_sim::biegung::steifigkeit(
+                m.biegung_nm,
+                m.biegung_kette_nm,
+                m.biegung_schraege_nm,
+                theta,
+            );
+            min = min.min(d);
+            max = max.max(d);
+        }
+        assert!(
+            (min - m.biegung_nm).abs() <= 1e-12 * m.biegung_nm,
+            "{stamm}: Minimum {min:e} gegen Schuss {:e}",
+            m.biegung_nm
+        );
+        let rel = (max - m.biegung_nm) / m.biegung_nm;
+        assert!(
+            rel <= 0.001_927,
+            "{stamm}: Maximum {max:e}, das sind +{:.4} % gegen den Schuss",
+            rel * 100.0
         );
     }
 }

@@ -19,12 +19,20 @@
 //! The ease moves the surplus onto the longer side. Whether it *stays* there is
 //! the bending stiffness: the longer side has to fold, and a stiff material
 //! pushes back instead. Measured on the same cap, both sides in % of their
-//! pattern length:
+//! pattern length (after the continuum of #127):
 //!
 //! | material | ease | shorter side | longer side |
 //! |---|---|---|---|
-//! | Radical 0.4, latex (2.48e-6 N m) | off / on | +7.99 / +5.08 | −3.60 / −6.24 |
-//! | Retifist 0.4, woven (6.04e-8 N m) | off / on | +6.40 / **+0.53** | −5.01 / −10.23 |
+//! | Radical 0.4, latex (2.48e-6 N m) | off / on | +8.03 / +5.31 | −3.54 / −6.01 |
+//! | Retifist 0.4, woven (6.04e-8 N m) | off / on | +6.35 / **+0.10** | −5.04 / −10.63 |
+//!
+//! (The numbers when #109 was written were +7.99 / +5.08 and +6.40 / +0.53; the
+//! continuum of #127 moved them, the woven case to its benefit. #129 moves the
+//! latex row alone, because it makes warp and bias 0.17 % stiffer: on `main`
+//! before it the same latex run read +7.82 / +5.18 and −3.70 / −6.14. The woven
+//! row is unchanged to the printed digit - `RETIFIST_NR_040` states one bending
+//! value for all three directions, so [`klon3d_sim::biegung::steifigkeit`]
+//! returns it bit for bit.)
 //!
 //! Latex never reaches the 1 % because it stretches rather than gathers; the
 //! switch still works there, it just cannot put the surplus anywhere. Woven
@@ -390,8 +398,8 @@ fn der_schalter_kuerzt_genau_die_mehrweite() {
 ///
 /// | material | ease | shorter | longer |
 /// |---|---|---|---|
-/// | Radical 0.4 (latex, 2.48e-6 N m) | off / on | +7.99 / **+5.08** | −3.60 / −6.24 |
-/// | Retifist 0.4 (woven, 6.04e-8 N m) | off / on | +6.40 / **+0.53** | −5.01 / −10.23 |
+/// | Radical 0.4 (latex, 2.48e-6 N m) | off / on | +8.03 / **+5.31** | −3.54 / −6.01 |
+/// | Retifist 0.4 (woven, 6.04e-8 N m) | off / on | +6.35 / **+0.10** | −5.04 / −10.63 |
 ///
 /// Latex cannot hold the 1 % because it stretches instead of gathering — with
 /// it the ease still works, it just moves the surplus somewhere else. Woven

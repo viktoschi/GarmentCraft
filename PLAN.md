@@ -460,8 +460,9 @@ N/m; that range the solver does not resolve (the flat scene runs from 4 · 10⁻
 the pattern mesh's own range (0.25…1.65 on `bluse2_v26`, 0.21…1.74 on `bluse3_v2`,
 0.29…1.50 on `rock_2schlitze_v34`), which holds every band edge at or below the
 stiffness of the piece's own stiffest. With the cap the flat scene settles to
-0.006 m/s over 180 frames on the default solver. Still open: anisotropic material,
-self-collision of the band and the layers.
+0.006 m/s over 180 frames on the default solver. Still open: self-collision of the
+band and the layers (the material is directional since #129, see the solver row in
+the stage table).
 
 **What the fold did to the acceptance numbers of `bluse2_stehend`** (release, same
 machine, measured at #123): the scene grows from 6 022 to 11 752 points and takes
@@ -483,7 +484,8 @@ model, not of the solver, and the test kept its floor and failed on it.
 `bluse2_stehend_einhalte` passes with the fold (release, 2 892 s): cap air median 0.6 /
 0.9 mm, 99.6 / 99.9 % of the seam pairs within 10 mm, resting speed 0.0007 / 0.0006 m/s,
 deepest point +0.20 mm, and the ease switch still relieves the armhole side (10.23 pp)
-more than the cap side (1.61 pp). **Under #127 it fails** — see below.
+more than the cap side (1.61 pp). **Under #127 it fails, and under #129 it fails on a
+different assertion** — see below.
 
 **What the continuum does to these numbers** (release, same machine, fold on, all
 floors untouched): `bluse2_stehend` **passes all five faults and still passes** —
@@ -510,17 +512,26 @@ plausibility, not a measurement.
 The honest reading: one acceptance number that was a documented model limit of the
 fold is now a passing fault, and every other number stays where it was. What is not
 claimed is that the collar now behaves — 43.9 mm at the ends is a large stand-off
-and the floor of 10 mm is a low bar.
+and the floor of 10 mm is a low bar. (#129 takes the ends to 29.2 mm — still above
+the floor, still a large stand-off.)
 
-**`bluse2_stehend_einhalte` fails one of its assertions** (release, fold on,
-4 718 s instead of 2 892 s). The reported number — air under the cap — is flat:
-median 1.9 mm without the ease switch and 1.2 mm with it (0.6 / 0.9 before), 99.9 %
-of the seam pairs within 10 mm in both runs. What broke is the sentence that makes
-that number meaningful: the ease switch no longer relieves the armhole side. The cap
-side stretches 0.31 pp less with the switch, the armhole side **2.26 pp more**
-(before: 1.61 and 10.23 pp less), so the armhole side goes from +21.44 % to +23.70 %
-of its pattern length instead of dropping. The test asserts `armloch_pp > kappe_pp`
-and fails.
+**`bluse2_stehend_einhalte` fails one of its assertions** — and since #129 it is a
+different one (release, fold on; 4 718 s under #127, 5 561.11 s now). The reported
+number — air under the cap — is still flat: median 1.9 mm without the ease switch and
+1.0 mm with it (1.9 / 1.2 under #127), greatest 15.2 / 13.5 mm, 100.0 % of the seam
+pairs within 10 mm in both runs, resting speed 0.0076 / 0.0008 m/s, deepest point
++0.20 mm. Both runs settle and nothing sinks; 520 edges are shortened.
+
+What broke is again the sentence that makes that number meaningful, but by another
+assertion. Under #127 the cap side still relieved (0.31 pp less) while the armhole
+side stretched 2.26 pp **more**, so `armloch_pp > kappe_pp` failed. Now the ease
+switch makes **both** sides stretch more — the cap side 1.88 pp and the armhole side
+4.08 pp, the armhole from +11.35 % to +15.43 % of its pattern length against
++7.24 → +9.12 % on the cap. The magnitude order is the right one this time, the sign
+is not, so the test stops one line earlier at `kappe_pp > 0.0`
+(`test bluse2_stehend_einhalte.rs:438`, message "Schalter ohne Wirkung auf die
+Kappenseite: -1.88 pp"). The floors, the assertion and the pattern are untouched —
+that is the rule.
 
 This is not lost data: the eased rest lengths do reach the membranes. A diagnostic
 built the copy both ways and compared each membrane's rest area with its pattern
@@ -528,25 +539,35 @@ triangle — 520 edges shorten, 286 of 10 302 triangles change, and exactly the 
 sleeve pieces lose 0.0877 % of rest area (the armhole side of the seam lies on the
 back pieces, which move by 0.004 %). The membrane sees the ease.
 
-The cause is the formulation, and it is the one place where the continuum is
-strictly *less* like cloth: **a shorter rest length is a tensile pre-strain, not
+The numbers behind it: **a shorter rest length is a tensile pre-strain, not
 slack.** The eased rest triangle sits underneath material that is still at the
 pattern positions, so its warp strain rises from −0.00385 to −0.00233 — the ease
 adds 0.0015 of pull to the sleeve, where a shortened distance spring would simply
-stop carrying force. Gathering therefore costs compression work that the cap cannot
-do: it stays within 1.3 mm of its pattern length (476.8 → 475.5 mm sewn) instead of
-furling, and the seam springs pull the surplus out of the armhole side, which goes
-from +21.44 % to +23.70 % of its pattern length. Gathering needs the opposite —
-fabric that goes slack and buckles — and the element has no compressive buckling (a
-wrinkled sheet is a nonlinear, out-of-plane instability). #127 asks for a continuum
-with three stiffnesses, not for a wrinkling model, so none was added.
+stop carrying force. That diagnostic was taken at #127; this run prints the strains
+it produces: the cap goes from 461.5 to 469.6 mm sewn (+7.24 → +9.12 % of its
+pattern length), the armhole from 462.4 to 479.4 mm (+11.35 → +15.43 %).
+
+**The explanation that followed from that — "the continuum cannot gather, it has no
+compressive buckling" — is not supported and is withdrawn.** A flat cap of 112 mm
+over a 100 mm chord, same element, ease on, woven fabric
+(`tests/einhalteweite.rs`, `kappe_mitt_mehrweite_haelt_die_kuerzere_seite`): the
+shorter side holds **+0.097 %** of its pattern length and the longer side buckles
+**18.5 mm** out of plane. The element does let cloth go slack and fold. What the
+flat scene shows is that the eased rest lengths alone are enough for it — the
+membrane's tensile pre-strain does not force the surplus back.
+
+So the failing assertion has a measured cause that is *not* established. The two
+scenes differ in more than one thing (a free flat cap against a worn blouse: gravity,
+body contact, an armhole already 41.5 cm long around a 41 cm body), and nothing was
+isolated to say which of them moves the surplus. What is certain is only what the run
+printed: the switch shortens 520 edges, 286 of 10 302 membrane rest areas change, and
+both sides end up stretching more instead of less.
 
 Left as is: no floor, assertion, pattern or switch touched — that is the rule. The
-failure is a property of #109 that the continuum breaks, recorded here and in the
-issue. If the ease is to keep working, the element needs a compressive branch that
-gives way (a compression-only cut-off on the strain energy, no tensile stress below
-zero and no compressive stress above it — at the price of a nonsmooth energy that the
-tangent has to handle); that is a task of its own.
+failure is recorded here and in the issue, without a cause. A compression-only
+cut-off on the strain energy was the obvious candidate after #127; the flat cap
+above shows gathering without it, so it is no longer the identified fix, and a
+nonsmooth energy is the last thing to add on a guess.
 
 Three decisions live in `saumkontur.rs` and are assumptions, not findings:
 
@@ -1177,16 +1198,17 @@ acceptance at 769 of 770 seam pairs within 10 mm and the lowest point at
 +0.20 mm. The table keeps the 2026-11-01 values as the record; the rerun values
 are within the run-to-run spread of a solve, not a change of the test.
 
-**With the fold (#123) and then the continuum (#127)** the same test runs 11 752
-points and the five faults read (release, floors untouched):
+**With the fold (#123), then the continuum (#127), then the bending direction
+(#129)** the same test runs 11 752 points and the five faults read (release,
+floors untouched):
 
-| Fault | #123 fold | #127 continuum | Floor |
-|---|---|---|---|
-| 1 Plunge opening at the bust | +48.3 mm | +46.0 mm | 10 mm |
-| 2 Sleeve cap air | 0.9 mm | 0.9 mm | 10 mm |
-| 3 Shoulder blade | +5.87 pp | +6.96 pp | 2 pp |
-| 4 Sleeve strain | +4.87 % | +4.57 % | 2 % |
-| 5 Collar ends off the skin | 5.2 mm (**failed**) | 43.9 mm | 10 mm |
+| Fault | #123 fold | #127 continuum | #129 bending | Floor |
+|---|---|---|---|---|
+| 1 Plunge opening at the bust | +48.3 mm | +46.0 mm | +42.4 mm | 10 mm |
+| 2 Sleeve cap air | 0.9 mm | 0.9 mm | 0.9 mm | 10 mm |
+| 3 Shoulder blade | +5.87 pp | +6.96 pp | +6.89 pp | 2 pp |
+| 4 Sleeve strain | +4.87 % | +4.57 % | +4.80 % | 2 % |
+| 5 Collar ends off the skin | 5.2 mm (**failed**) | 43.9 mm | 29.2 mm (11.3 mm at the edge) | 10 mm |
 
 Fault 5 is the one the fold broke and the continuum restores. The stiffness
 formulation is the only difference between the two runs; **which** of the three
@@ -1195,6 +1217,26 @@ fault under a net with `ν = 1/3` (`G = 0.375·E`) and the membrane carries late
 real `G = E/2`, a third more resistance to a collar folding over - but proving it
 would need a run with `schub_n_m = 0.375·E` alone. Fault 2 stays "not shown"; that
 reason is geometric and none of this touches it.
+
+**Bending along the grainline (#129)** moves every fault a little and none of them
+across its floor (release, 1 895.81 s against 2 331 s, same machine, same fold,
+floors untouched). Resting speed 0.0016 m/s, deepest point +0.20 mm, 768 of 770 seam
+pairs within 10 mm (99.7 %, was 769 under #127; the one seam whose largest gap
+exceeds 10 mm is V13 at 12.5 mm), 180 frames to settle and 600 to hold, nothing
+sinks and no point is held fast. The plunge at the bust shrinks by 3.6 mm (+46.0 →
++42.4), the shoulder blade by 0.07 pp, the sleeve gains 0.23 pp and the collar's
+ends come from 43.9 to 29.2 mm (11.3 mm at the edge, 150.5 mm apart).
+
+That last number is worth **14.7 mm from a 0.17 % material change** (2 482.2424
+against 2 486.4924 g·mm²/s²/rad), and it is the honest limit of what this task
+shows: bending now follows the grainline, and the scenes confirm it does — but on
+these eight files the difference is one part in 583, so nothing in the repository
+demonstrates what a *real* woven profile would do. Where it reaches far - the collar
+- a barely stable lever amplifies it. Wherever the fabric is isotropic the result is
+bit-identical, and that is what `tests/biegung.rs` and the flat `einhalteweite`
+counter-measurement pin: the woven row of the ease table reads to the printed digit
+as before, the latex row moves (interleaved A/B against `203ca00`, release, 22.8 s
+each: cap +7.824/+5.183 → +8.028/+5.314, longer side −3.697/−6.143 → −3.537/−6.008).
 
 Fault 2 is the one that does not appear. `aermelkugel` measures why, on the
 pattern and on the placement:
@@ -1356,22 +1398,27 @@ rest lengths. `Szene::einhalte_kanten` counts the edges that were shortened, so 
 scene that asked for ease and got none is visible rather than silent.
 
 Measured in `tests/einhalteweite.rs` on a cap of 112 mm of arc over a 100 mm
-chord, in per cent of each side's pattern length:
+chord, in per cent of each side's pattern length (release; the numbers #109
+wrote down were +6.40 / +0.53 and +7.99 / +5.08, the continuum of #127 moves
+them and moves the woven case the right way; #129 touches the latex row alone,
+see the note under the solver row):
 
 | fabric | ease | shorter side | longer side |
 |---|---|---|---|
-| Retifist 0.4, woven (bending 6.04e-8 N m) | off / on | +6.40 / **+0.53** | −5.01 / −10.23 |
-| Radical 0.4, latex (bending 2.48e-6 N m) | off / on | +7.99 / +5.08 | −3.60 / −6.24 |
+| Retifist 0.4, woven (bending 6.04e-8 N m) | off / on | +6.35 / **+0.10** | −5.04 / −10.63 |
+| Radical 0.4, latex (bending 2.48e-6 N m) | off / on | +8.03 / +5.31 | −3.54 / −6.01 |
 
-With the switch off both sides meet at 106.4 mm — 100 mm stretched by 6.40 %,
-112 mm shortened by 5.01 %. With it on, 83 % of the 12 mm surplus is gone from
-the longer side, the seam pairs read 0.0021 mm in the median and 0.0181 mm at
-worst, and the shorter side holds to half a per cent.
+The woven cap: with the switch off both sides meet at 106.35 mm — 100 mm
+stretched by 6.35 %, 112 mm shortened by 5.04 %. With it on both land at
+100.10 mm, so 11.9 of the 12 mm surplus have left the longer side, which arches
+**18.5 mm** out of plane; the seam pairs read 0.0088 mm in the median and
+0.0466 mm at worst, and the shorter side holds to **0.10 %**. The latex cap
+meets at 108.03 mm instead, because latex gives before it folds.
 
 The **fabric decides whether the ease holds.** Easing means the longer side has
 to fold, and the bending stiffness decides whether it folds or pushes back.
 Latex stretches instead of gathering — with it the switch still moves the surplus
-(the shorter side drops from +7.99 to +5.08 %), but it never reaches the 1 % the
+(the shorter side drops from +8.03 to +5.31 %), but it never reaches the 1 % the
 issue asks for. Woven fabric does. So the acceptance is written on woven fabric
 and latex stays as the counter-measurement in `material_und_falten`.
 
@@ -1382,7 +1429,18 @@ piece, and the shorter side reads +1.97 % even with the ease on.
 No pattern in the repository carries cap ease (all measured: `bluse2_v26`
 41.5308 / 41.5310 cm, `bluse1_v25` 41.6004 / 41.6002, `bluse3_v2` 40.0186 /
 40.0187, `bolero_v37` 40.9273 / 40.9463), and the switch is off by default, so
-`bluse2_stehend` is unchanged at +0.20 mm and 769 of 770 seam pairs.
+`bluse2_stehend` stays at +0.20 mm and 768 of 770 seam pairs (#129; the only seam
+whose largest gap exceeds 10 mm is V13 with 12.5 mm — no point sinks).
+
+**How this relates to the garment failure.** The flat cap gathers — the shorter
+side holds +0.10 %, the longer side arches 18.5 mm — so the element does have
+slack to fold into, and the #127 claim that "the continuum pulls instead of
+gathering" is withdrawn (`MATERIAL.md`, open issues). `bluse2_stehend_einhalte`
+still fails an assertion, and #129 moved which one: with the ease switch both
+sides of the cap seam now stretch **more** (+1.88 pp on the cap side, +4.08 pp on
+the armhole side) instead of less. The two scenes differ in gravity, body contact,
+an already over-long armhole and a worn rather than free seam, and nothing was
+isolated to say which of those reverses the sign.
 
 The plunge opening at the neck is not part of the table: the blouse's neckline
 measures 37.6 cm while the body's neck opening is 32.1 cm, so 5.5 cm cannot close
@@ -1400,8 +1458,8 @@ per stage:
 | Stage | needed for fabric | Status |
 |---|---|---|
 | 1 Pattern reading | grainline per piece: read Seamly2D `<grainline>` (position, rotation), otherwise a fixed piece axis | **done** (`fadenlauf.rs`, #10): visible grainlines only, formula values in the pattern unit, anchored ones normalised into the seam line's box. Carried into the mesh since #88: `Teilnetz::fadenlauf` in mm in the net's own frame, and `klon3d netz --svg` draws the axis with the arrow tips; an unreadable grainline is a message in `Musternetz::fehler`, never a lost piece. `Fadenlauf::richtung()` gives the axis as a 2D unit vector |
-| 3 Mesh | carry the grainline into the mesh (direction per triangle); sewn seam with the seam allowance turned inward instead of an overlap seam; glue zone = fusible interfacing | grainline **done**, seam allowance and glue zone open: `Szene::faser` carries one unit vector per triangle (`klon3d-sim/src/faser.rs`, #106), taken from the piece's axis through the same triangle map the solver uses, so it follows a nonlinear placement - across the piece, not at one point. A piece without a readable grainline takes pattern x and is counted in `Szene::faser_ersatz`; a triangle the placement collapses takes its longest edge and is counted in `Szene::faser_entartet`. Carried data only, nothing reads it while the material stays isotropic. Unequal seam sides since #109: the mesh pairs them at the same arc fraction (it always did), and `Simparameter::einhalteweite` makes the longer side give the surplus — see "Ease in the solver" above. The **cutting line** is in the mesh as data since #117 (`Teilnetz::schnitt`, mm in the net's own frame, empty without an allowance, same `Ecken::Eigen` ring as the export), and since #119 the **strip of triangles** between the seam line and that cutting line (`Teilnetz::zugabe`, `klon3d-mesh/src/zugabe.rs`, outer edge the same ring, positive winding, one anchor per outer point, `klon3d netz` prints its length and triangle count), welded to the piece's boundary points since #121 (`zugabe::verschweisst`: every boundary point is a band vertex at its own coordinates, the split adds no area). Since #123 the strip is folded 180° inwards at the seam line and carried by the scene as fabric of its own (`klon3d_sim::saumfalte`, `Szene::aus_netz_mit_falte`): the pattern points, triangles and seam pairs stay as they are, the band is appended after them with its own mass, stretch springs, a rest-length-0 hold onto the boundary and a 180° bending constraint per fold edge. It is opt-in, so only a scene that asks for it changes; the acceptance numbers below are the ones `bluse2_stehend` reports with the fold. Still open: anisotropic material, self-collision of the band and the layers |
-| 4 Solver | **anisotropic material**: warp, weft and shear separate; for this a **triangle continuum** instead of edge springs (those have ν = 1/3 and no independent shear); noticeable, direction-dependent bending; **self-collision** and layers, because fabric falls into folds | **continuum done** (#127): one membrane per triangle with warp (`fSvK`), weft (`fSuK`) and shear (`fHK`) as three independent stiffnesses, energy `U/A₀ = ½E_kε_k² + ½E_sε_s² + 2Gε_ks²` on Green strain in the triangle's own grainline basis; **ν follows** from E and G (`ν = E/(2G) − 1`), it is set nowhere. The same element on the CPU (`ImplizitCg`), the XPBD cross-check (`CpuReferenz`) and the GPU (WGSL, four `vec4` per triangle). The old edge springs stay in `abstand` as the rest-length source (reduction and the ease of #109) but carry no force on triangles a membrane covers (`Szene::membran_kante`). Acceptance `crates/klon3d-sim/tests/kontinuum.rs`: E and G read back within 5 %, ν = 1e-12, an invented anisotropic profile shows both directions. Open: **direction-dependent bending** (warp/weft/bias bending is still one value), self-collision (switch, CPU, finding 116), layers |
+| 3 Mesh | carry the grainline into the mesh (direction per triangle); sewn seam with the seam allowance turned inward instead of an overlap seam; glue zone = fusible interfacing | grainline **done**, seam allowance and glue zone open: `Szene::faser` carries one unit vector per triangle (`klon3d-sim/src/faser.rs`, #106), taken from the piece's axis through the same triangle map the solver uses, so it follows a nonlinear placement - across the piece, not at one point. A piece without a readable grainline takes pattern x and is counted in `Szene::faser_ersatz`; a triangle the placement collapses takes its longest edge and is counted in `Szene::faser_entartet`. Carried data only: the membrane builds its rest basis from the pattern triangle and the bending from the piece axis, neither of them reads this field. Unequal seam sides since #109: the mesh pairs them at the same arc fraction (it always did), and `Simparameter::einhalteweite` makes the longer side give the surplus — see "Ease in the solver" above. The **cutting line** is in the mesh as data since #117 (`Teilnetz::schnitt`, mm in the net's own frame, empty without an allowance, same `Ecken::Eigen` ring as the export), and since #119 the **strip of triangles** between the seam line and that cutting line (`Teilnetz::zugabe`, `klon3d-mesh/src/zugabe.rs`, outer edge the same ring, positive winding, one anchor per outer point, `klon3d netz` prints its length and triangle count), welded to the piece's boundary points since #121 (`zugabe::verschweisst`: every boundary point is a band vertex at its own coordinates, the split adds no area). Since #123 the strip is folded 180° inwards at the seam line and carried by the scene as fabric of its own (`klon3d_sim::saumfalte`, `Szene::aus_netz_mit_falte`): the pattern points, triangles and seam pairs stay as they are, the band is appended after them with its own mass, stretch springs, a rest-length-0 hold onto the boundary and a 180° bending constraint per fold edge. It is opt-in, so only a scene that asks for it changes; the acceptance numbers below are the ones `bluse2_stehend` reports with the fold. Still open: self-collision of the band and the layers (the material is directional since #127/#129) |
+| 4 Solver | **anisotropic material**: warp, weft and shear separate; for this a **triangle continuum** instead of edge springs (those have ν = 1/3 and no independent shear); noticeable, direction-dependent bending; **self-collision** and layers, because fabric falls into folds | **continuum done** (#127): one membrane per triangle with warp (`fSvK`), weft (`fSuK`) and shear (`fHK`) as three independent stiffnesses, energy `U/A₀ = ½E_kε_k² + ½E_sε_s² + 2Gε_ks²` on Green strain in the triangle's own grainline basis; **ν follows** from E and G (`ν = E/(2G) − 1`), it is set nowhere. The same element on the CPU (`ImplizitCg`), the XPBD cross-check (`CpuReferenz`) and the GPU (WGSL, four `vec4` per triangle). The old edge springs stay in `abstand` as the rest-length source (reduction and the ease of #109) but carry no force on triangles a membrane covers (`Szene::membran_kante`). Acceptance `crates/klon3d-sim/tests/kontinuum.rs`: E and G read back within 5 %, ν = 1e-12, an invented anisotropic profile shows both directions. **Direction-dependent bending done** (#129): the bending constraint of an inner edge takes `D(θ)` from `fBvK`/`fBuK`/`fBhK`, θ the angle between the edge's normal and the piece's grainline - the tensor rotation of an orthotropic plate (`klon3d-sim/src/biegung.rs`). The eight latex files differ by 0.17 % between weft and warp/bias, so a scene gets at most **+0.1926 %** stiffer and never softer; isotropic input stays bit-identical, which is why the acceptance numbers are reproducible. Kept on one value on purpose: the seam hinge (two pieces, two grainlines), the fold band, a bonded pair. Open: **self-collision** (switch, CPU, finding 116), layers |
 | Material | `.zfab` reader in Rust, values from CLO's fabric library (ADR-015), no measurements of our own | **read** (`klon3d-pattern/src/zfab.rs`, #83): one reader for both containers, the CLO-fabric mapping lives in `klon3d-pipeline`; `anziehen --material` (#85) and `roehre --material` (#87) pick a `.zfab` by path or by a stem from `assets/stoffe`, through one shared resolution |
 | 5 Inspection output | drape and folds; comparison against CLO with the same fabric, draping and fitted reported separately (already specified) | open |
 

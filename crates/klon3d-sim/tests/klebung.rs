@@ -51,6 +51,13 @@ const LAMINAT_08: Material = Material {
     kette_n_m: 696.548,
     schub_n_m: 348.318,
     biegung_nm: 2482.2424e-9 * 8.0,
+    // The same number in all three directions: this synthetic laminate is
+    // defined as the weft value times eight, so the measured energy of the test
+    // stays the one derived in the module doc ("4 × 2,482"). The real `.zfab`
+    // files differ by 0.17 % between the directions; a test material built by
+    // hand has no reason to copy that.
+    biegung_kette_nm: 2482.2424e-9 * 8.0,
+    biegung_schraege_nm: 2482.2424e-9 * 8.0,
     flaechengewicht_kg_m2: 0.698,
     dicke_m: 0.8e-3,
     reibung: 0.03,

@@ -1,8 +1,9 @@
 //! Materialwerte in SI-Einheiten, aus CLO-Stoffprofilen übernommen.
 //!
 //! Die Felder folgen CLOs Stoffparametern (ADR-015, `MATERIAL.md`); für
-//! Latex sind Kette, Schuss und Diagonale gleich. Umrechnung der
-//! CLO-Einheiten (Annahme aus `MATERIAL.md`, nicht belegt):
+//! Latex kommen Kette, Schuss und Diagonale aus **einer** Messung und liegen
+//! deshalb fast aufeinander (0,002 % in der Dehnung, 0,17 % in der Biegung).
+//! Umrechnung der CLO-Einheiten (Annahme aus `MATERIAL.md`, nicht belegt):
 //!
 //! | CLO | Einheit | hier |
 //! |---|---|---|
@@ -28,16 +29,36 @@ pub struct Material {
     /// steht getrennt in [`Self::kette_n_m`].
     pub dehnung_n_m: f64,
     /// Dehnsteifigkeit der Membran in **Kettrichtung** (CLO Stretch Warp,
-    /// `fSvK`) in N/m. Für die acht Profile im Repo gleich dem Schuss
-    /// (isotrop, 0,002 % Unterschied); getrennt geführt, weil ein echtes
-    /// Gewebe sie trennt und die Membran beide Richtungen einzeln braucht.
+    /// `fSvK`) in N/m. Für die acht Profile im Repo fast gleich dem Schuss
+    /// (0,002 % Unterschied); getrennt geführt, weil ein echtes Gewebe sie
+    /// trennt und die Membran beide Richtungen einzeln braucht.
     pub kette_n_m: f64,
     /// Schubsteifigkeit (CLO Shear, `fHK`) in N/m. Die Membran nimmt sie als
     /// dritte unabhängige Größe; ν folgt daraus (`ν = E/(2G) − 1`), es wird
     /// nicht gesetzt.
     pub schub_n_m: f64,
-    /// Biegesteifigkeit (CLO Bending) in N·m.
+    /// Biegesteifigkeit **in Schussrichtung** (CLO Bending Weft, `fBuK`) in
+    /// N·m.
+    ///
+    /// Die Richtung ist Teil des Namens, so wie bei [`Self::dehnung_n_m`]:
+    /// `saumfalte.rs` (Bandkanten), `klebung.rs` (`Stoffpaar`) und
+    /// `platzierung.rs` lesen dieses Feld und haben keinen eigenen Fadenlauf -
+    /// sie meinen die Schussrichtung. `szene.rs` rechnet die Biegung je Kante
+    /// dagegen seit #129 richtungsabhängig aus [`Self::biegung_kette_nm`],
+    /// diesem Wert und [`Self::biegung_schraege_nm`].
     pub biegung_nm: f64,
+    /// Biegesteifigkeit in **Kettrichtung** (CLO Bending Warp, `fBvK`) in N·m.
+    /// Gleich [`Self::biegung_nm`] bei einem Stoff, der nur eine Zahl für alle
+    /// Richtungen angibt; die acht Profile im Repo liegen 0,17 % darüber
+    /// (Schuss 2482,2424 gegen Kette = Schräg 2486,4924 g·mm²/s²/rad).
+    pub biegung_kette_nm: f64,
+    /// Biegesteifigkeit unter **45°** (CLO Bending Bias, `fBhK`) in N·m.
+    ///
+    /// Der dritte Stützpunkt der Tensor-Rotation ([`crate::biegung`]) neben
+    /// Schuss und Kette; er entscheidet, wie weit die Kurve zwischen beiden
+    /// liegt. Die acht Profile im Repo geben hier denselben Wert wie für die
+    /// Kette.
+    pub biegung_schraege_nm: f64,
     /// Flächengewicht in kg/m².
     pub flaechengewicht_kg_m2: f64,
     /// Dicke in m; die Hälfte ist der Kollisionsabstand.
@@ -55,6 +76,8 @@ pub const RADICAL_RUBBER_04: Material = Material {
     kette_n_m: 348.281_718_8,
     schub_n_m: 174.159_046_9,
     biegung_nm: 2482.2424e-9,
+    biegung_kette_nm: 2486.4924e-9,
+    biegung_schraege_nm: 2486.4924e-9,
     flaechengewicht_kg_m2: 0.348_989_9,
     dicke_m: 0.4e-3,
     reibung: 0.03,
@@ -69,6 +92,10 @@ pub const RETIFIST_NR_040: Material = Material {
     kette_n_m: 33.333_332,
     schub_n_m: 6.666_666_5,
     biegung_nm: 60.361e-9,
+    // Set by hand for a soft drape, in one direction only - so the same in all
+    // three. A real sheet is not.
+    biegung_kette_nm: 60.361e-9,
+    biegung_schraege_nm: 60.361e-9,
     flaechengewicht_kg_m2: 0.380,
     dicke_m: 0.4e-3,
     reibung: 0.03,
@@ -88,6 +115,8 @@ impl Material {
             kette_n_m: self.kette_n_m * f,
             schub_n_m: self.schub_n_m * f,
             biegung_nm: self.biegung_nm * f.powi(3),
+            biegung_kette_nm: self.biegung_kette_nm * f.powi(3),
+            biegung_schraege_nm: self.biegung_schraege_nm * f.powi(3),
             flaechengewicht_kg_m2: self.flaechengewicht_kg_m2 * f,
             dicke_m: dicke,
             ..*self
