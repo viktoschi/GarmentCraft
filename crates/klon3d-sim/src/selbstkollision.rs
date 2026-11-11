@@ -22,6 +22,16 @@
 //! um r₁ + r₂ (= Stoffdicke + Zusatzdicke) auseinander, dazu ein Zuschlag von
 //! 0,04 mm.
 //!
+//! **Ausnahme: ein Blatt mit sich selbst.** Das gefaltete Zugabeband ist nicht
+//! die zweite Lage, sondern die Rückseite desselben Teils ([`crate::saumfalte`]).
+//! Für ein Paar Band auf eigenem Träger gilt als Ruheabstand die Summe der
+//! **Stoffdicken** (2 × 0,2 mm), nicht der Kissenabstand mit der Zusatzdicke
+//! (2,9 mm) — die Zusatzdicke ist ein Rechenpolster gegen Durchdringen, keine
+//! Geometrie, und würde das aufliegende Band sichtbar abheben. Das gilt für die
+//! Punkt–Dreieck- wie für die Kante–Kante-Suche. Ebenso zählt eine Feder der
+//! Ruhelänge 0 als Schweißung wie eine Naht: zwei Punkte am selben Ort sind eine
+//! Stelle, keine zwei Lagen.
+//!
 //! Dieses Modul ist ein eigener Nachbau in Rust auf der CPU (`f64`, SI), kein
 //! übertragener Code.
 
@@ -76,16 +86,74 @@ pub struct Stoffnetz {
     pub r_dreieck: Vec<f64>,
     /// (kleinerer, größerer Punkt) → Kantennummer
     pub kanten_index: std::collections::HashMap<(u32, u32), u32>,
-    /// je Punkt seine Nahtpartner. In klon3d sind die beiden Seiten einer
-    /// Naht zwei Punkte am selben Ort; die Stoßsuche (und, wenn nicht anders
-    /// verlangt, die Schnittsuche) behandelt sie wie eine gemeinsame Ecke — bei
-    /// CLO der einzige Ausschluss. Ohne das gälte jedes Zittern an der Naht als
-    /// Durchgang durch das Nachbardreieck (Bluse3: 300 Stöße je Bild in Ruhe
-    /// statt 1).
+    /// je Punkt seine Nahtpartner **und seine Weld-Partner**. In klon3d sind die
+    /// beiden Seiten einer Naht zwei Punkte am selben Ort; die Stoßsuche (und,
+    /// wenn nicht anders verlangt, die Schnittsuche) behandelt sie wie eine
+    /// gemeinsame Ecke — bei CLO der einzige Ausschluss. Ohne das gälte jedes
+    /// Zittern an der Naht als Durchgang durch das Nachbardreieck (Bluse3: 300
+    /// Stöße je Bild in Ruhe statt 1).
+    ///
+    /// Dasselbe gilt für zwei Punkte, die eine Feder der Ruhelänge 0
+    /// zusammenhält: das gefaltete Zugabeband ist über solche Federn an die
+    /// Nahtlinie des Teils geschweißt ([`crate::saumfalte`]), liegt also mit dem
+    /// Teilpunkt auf demselben Ort wie eine Naht. Ohne den Ausschluss sah die
+    /// Nähe-Suche dort zwei Lagen im Abstand 0 und schob das Band vom Teil weg
+    /// (Rechteck 20 × 20 cm mit 3 mm Zugabe: 788 Paare bei t = 0, davon 406 über
+    /// eine 0-Feder; nach 60 Bildern lag das Band bei −2,52 mm statt bei −0,40 mm
+    /// und die Durchdringungen am Ende bei 6 statt 3). Mit dem
+    /// Ausschluss bleiben 0 Paare über eine 0-Feder und 382 Paare übrig: 348 Band
+    /// auf eigenem Träger (83 Punkt–Dreieck, 265 Kante–Kante) und 34 Band↔Band
+    /// an der Gehrung. Für die erste Gruppe gilt nicht der Ausschluss, sondern
+    /// der Ruheabstand [`Stoffnetz::band_abstand`] — in **beiden** Nähe-Suchen,
+    /// Punkt–Dreieck wie Kante–Kante.
     pub naht_partner: Vec<Vec<u32>>,
+    /// Je Punkt das Schnittteil, zu dem er gehört (Index in `Szene::teile`).
+    pub teil_von: Vec<u32>,
+    /// Je Punkt der Träger seines gefalteten Zugabebands (`u32::MAX` = kein
+    /// Band). Ein Band und sein Träger sind **eine Lage Stoff**: das Band ist
+    /// die Rückseite desselben Teils, nur um die Nahtlinie geklappt. Für ein
+    /// solches Paar gilt als Ruheabstand **die Summe der beiden Stoffdicken**
+    /// (2 × 0,2 mm), nicht der Kissenabstand `Stoffdicke + Zusatzdicke`
+    /// (2,9 mm): die Zusatzdicke ist ein Rechenpolster, keine Geometrie, und
+    /// würde das aufliegende Band sichtbar abheben.
+    pub band_von: Vec<u32>,
+    /// Je Punkt die halbe **Stoffdicke** (m) ohne die Zusatzdicke — der
+    /// Abstand, den zwei Lagen desselben Stoffes wirklich trennt.
+    pub dicke: Vec<f64>,
 }
 
 impl Stoffnetz {
+    /// Gehören `a` und `b` zu demselben Blatt, weil eines davon das gefaltete
+    /// Zugabeband des anderen ist? Dann ist es kein Kontakt zweier Lagen,
+    /// sondern die Rückseite einer Lage.
+    pub fn band_und_traeger(&self, a: u32, b: u32) -> bool {
+        let traeger = |p: u32| -> Option<u32> {
+            let v = *self.band_von.get(p as usize)?;
+            (v != u32::MAX).then_some(v)
+        };
+        let teil = |p: u32| -> Option<u32> { self.teil_von.get(p as usize).copied() };
+        match (traeger(a), traeger(b)) {
+            (Some(t), _) if teil(b) == Some(t) => true,
+            (_, Some(t)) if teil(a) == Some(t) => true,
+            _ => false,
+        }
+    }
+
+    /// Ruheabstand eines Bandes auf seinem eigenen Träger: die Summe der beiden
+    /// **Stoffdicken** (2 × halbe Dicke), nicht `Stoffdicke + Zusatzdicke`. Die
+    /// Zusatzdicke ist CLOs Rechenpolster gegen Durchdringen, keine Geometrie;
+    /// mit ihr stünde das aufliegende Band 2,9 mm über dem Stoff, den es
+    /// bedeckt. `None`, wenn es kein Band-Träger-Paar ist.
+    pub fn band_abstand(&self, a: u32, andere: &[u32]) -> Option<f64> {
+        andere
+            .iter()
+            .any(|&b| self.band_und_traeger(a, b))
+            .then(|| {
+                let dick = |p: u32| self.dicke.get(p as usize).copied().unwrap_or(0.0);
+                dick(a) + andere.iter().map(|&b| dick(b)).fold(0.0, f64::max)
+            })
+    }
+
     /// Aus Dreiecken und dem Radius je Punkt. Kante und Dreieck bekommen den
     /// größten Radius ihrer Punkte (bei CLO ist er je Schnittteil gleich).
     pub fn neu(dreiecke: &[[u32; 3]], r_punkt: Vec<f64>) -> Stoffnetz {
@@ -115,10 +183,10 @@ impl Stoffnetz {
         }
         let r_kante = kanten.iter().map(|k| r_punkt[k[0] as usize].max(r_punkt[k[1] as usize])).collect();
         let r_dreieck = dreiecke.iter().map(|d| d.iter().map(|&i| r_punkt[i as usize]).fold(0.0, f64::max)).collect();
-        Stoffnetz { dreiecke: dreiecke.to_vec(), kanten, kanten_dreiecke, dreieck_kanten, r_punkt, r_kante, r_dreieck, kanten_index: karte, naht_partner: Vec::new() }
+        Stoffnetz { dreiecke: dreiecke.to_vec(), kanten, kanten_dreiecke, dreieck_kanten, r_punkt, r_kante, r_dreieck, kanten_index: karte, naht_partner: Vec::new(), teil_von: Vec::new(), band_von: Vec::new(), dicke: Vec::new() }
     }
 
-    /// Ist `a` derselbe Punkt wie `b` oder sein Nahtpartner?
+    /// Ist `b` für `a` derselbe Punkt oder sein Naht- oder Weldpartner?
     pub fn gleich_oder_partner(&self, a: u32, b: u32) -> bool {
         a == b || self.naht_partner.get(a as usize).is_some_and(|l| l.contains(&b))
     }
@@ -346,7 +414,11 @@ fn finde_punkt_dreieck(netz: &Stoffnetz, x: &[[f64; 3]], w: &[f64], nrm: &Normal
         // Vorzeichen der gegenüberliegenden Ecke je Kantenebene: innen.
         let s = [dot(sub(p[2], p[0]), en[0]), dot(sub(p[0], p[1]), en[1]), dot(sub(p[1], p[2]), en[2])];
         gitter.je_eintrag(&qt, |v, c| {
-            if v == i0 || v == i1 || v == i2 {
+            // Same point, seam partner or weld partner: one place, not two
+            // layers. The proximity search used to skip only the identical
+            // indices, so a welded band point counted as a layer lying on the
+            // piece's own triangle at distance 0 and was pushed off it.
+            if d.iter().any(|&i| netz.gleich_oder_partner(v, i)) {
                 return;
             }
             let vu = v as usize;
@@ -357,7 +429,13 @@ fn finde_punkt_dreieck(netz: &Stoffnetz, x: &[[f64; 3]], w: &[f64], nrm: &Normal
                 return;
             }
             let xv = x[vu];
-            let ruhe = rt + netz.r_punkt[vu];
+            let mut ruhe = rt + netz.r_punkt[vu];
+            // A folded allowance band on its own piece: the two layers of the
+            // same fabric rest one fabric thickness apart, not the padded
+            // `dicke + zusatzdicke`.
+            if let Some(eine_dicke) = netz.band_abstand(v, d) {
+                ruhe = eine_dicke;
+            }
             let soll = ruhe + ZUSCHLAG_PAAR;
             let sd = dot(nt, sub(xv, p[0]));
             if sd.abs() > soll {
@@ -446,9 +524,20 @@ fn finde_kante_kante(netz: &Stoffnetz, x: &[[f64; 3]], w: &[f64], nrm: &Normalen
                 return;
             }
             let [b0, b1] = netz.kanten[f];
-            if b0 == a0 || b0 == a1 || b1 == a0 || b1 == a1 {
+            // Shared point, seam partner or weld partner: one place, not two
+            // layers (same rule as in `finde_punkt_dreieck`).
+            if [b0, b1].iter().any(|&b| netz.gleich_oder_partner(a0, b) || netz.gleich_oder_partner(a1, b)) {
                 return;
             }
+            // Band against its own piece: the band is the piece's own reverse,
+            // so this pair gets the same rest distance as in the point-triangle
+            // search (one fabric thickness, `Stoffnetz::band_abstand`). Either
+            // edge may be the band's, so both sides are asked.
+            let band_dick = netz
+                .band_abstand(a0, &[b0, b1])
+                .or_else(|| netz.band_abstand(a1, &[b0, b1]))
+                .or_else(|| netz.band_abstand(b0, &[a0, a1]))
+                .or_else(|| netz.band_abstand(b1, &[a0, a1]));
             if [a0, a1, b0, b1].iter().all(|&i| w[i as usize] <= 0.0) {
                 return;
             }
@@ -477,7 +566,10 @@ fn finde_kante_kante(netz: &Stoffnetz, x: &[[f64; 3]], w: &[f64], nrm: &Normalen
             let pb = add(pb0, mul(ub, sb));
             let dv = sub(pa, pb);
             let abstand = norm(dv);
-            let ruhe = netz.r_kante[e] + netz.r_kante[f];
+            let ruhe = match band_dick {
+                Some(eine_dicke) => eine_dicke,
+                None => netz.r_kante[e] + netz.r_kante[f],
+            };
             if abstand > ruhe + ZUSCHLAG_PAAR {
                 return;
             }
@@ -536,6 +628,34 @@ pub fn aus_szene(s: &crate::Szene, zusatzdicke: f64) -> (Stoffnetz, Stoffwerte) 
     for &[i, j] in &s.naht.punkte {
         netz.naht_partner[i as usize].push(j);
         netz.naht_partner[j as usize].push(i);
+    }
+    // Feder der Ruhelänge 0 = derselbe Ort, wie eine Naht: das gefaltete
+    // Zugabeband hängt so an der Nahtlinie des Teils (`crate::saumfalte`).
+    // Ohne das sähe die Nähe-Suche zwei Lagen im Abstand 0.
+    for (e, &[i, j]) in s.abstand.punkte.iter().enumerate() {
+        if s.abstand.ruhe[e] != 0.0 || i == j {
+            continue;
+        }
+        if !netz.naht_partner[i as usize].contains(&j) {
+            netz.naht_partner[i as usize].push(j);
+        }
+        if !netz.naht_partner[j as usize].contains(&i) {
+            netz.naht_partner[j as usize].push(i);
+        }
+    }
+    // Je Punkt sein Teil und, wenn es ein gefaltetes Band ist, sein Träger.
+    netz.teil_von = vec![u32::MAX; n];
+    netz.band_von = vec![u32::MAX; n];
+    netz.dicke = s.kollisionsabstand.clone();
+    for (ti, t) in s.teile.iter().enumerate() {
+        for i in t.punkte.clone() {
+            netz.teil_von[i] = ti as u32;
+        }
+        if let Some(traeger) = t.band_von {
+            for i in t.punkte.clone() {
+                netz.band_von[i] = traeger as u32;
+            }
+        }
     }
     let mut e_punkt = vec![0.0; n];
     let mut e_dreieck = vec![0.0; s.dreiecke.len()];

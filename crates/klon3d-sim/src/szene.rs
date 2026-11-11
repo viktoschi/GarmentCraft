@@ -185,6 +185,12 @@ pub struct Teilinfo {
     pub punkte: Range<usize>,
     pub dreiecke: Range<usize>,
     pub vorgabe: Teilvorgabe,
+    /// Der Teil, dessen gefaltetes Zugabeband dies ist: `Some(träger)` für ein
+    /// Band, `None` für ein Schnittteil. Band und Träger sind **eine Lage
+    /// Stoff**, an der Falz verbunden: sie ruhen eine Stoffdicke auseinander,
+    /// nicht den Kissenabstand zweier Lagen, und ein Punkt am anderen gilt
+    /// nicht als zweite Lage ([`crate::selbstkollision::finde`]).
+    pub band_von: Option<usize>,
 }
 
 /// Die ganze Szene.
@@ -479,6 +485,7 @@ impl Szene {
                 punkte: off..x.len(),
                 dreiecke: d0..dreiecke.len(),
                 vorgabe: vg,
+                band_von: None,
             });
         }
 
