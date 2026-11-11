@@ -30,6 +30,11 @@
 //!    carries a mass; the band is held by tension, friction and the fold alone
 //!    (ADR-023).
 //!
+//! Test 9 asks for something the list above assumes: that the turn keeps the
+//! band's own springs at their rest length. It does not, unless the fold line is
+//! the seam-line edge leaving the point - a line across the point's own offset
+//! shears the band where the seam line turns.
+//!
 //! ## Why the patterns are laid flat
 //!
 //! No body, no gravity, no reduction: the pattern is the cloth, the same device
@@ -861,6 +866,83 @@ fn die_falte_haengt_nur_an() {
             ohne.naht.len(),
             b.punkte,
             b.dreiecke
+        );
+    }
+}
+
+/// 9. The fold does not shear the band.
+///
+/// The band is turned about the seam line, so every stretch spring with both ends
+/// band points must still measure its rest length afterwards. Where the seam line
+/// turns, that only holds if the fold line is the seam-line edge leaving the
+/// point: a line across the point's own offset also runs along the seam there,
+/// and the turn flips that component instead of carrying it along, so the springs
+/// stretching across the corner come out short. Measured with the offset line on
+/// a 20 × 20 cm rectangle: 60 of 326 band springs compressed by up to 43 %, and the
+/// corner point sank 3,16 mm through the piece; with the seam-line edge the
+/// deepest point without self-collision is 0,37 mm (`tests/falte_lage.rs`).
+///
+/// The patterns are laid flat and nothing is solved, so this is the built geometry
+/// and not a relaxation result. A spring that is off counts with the share of its
+/// rest length it misses by; the allowance tolerates 1e-4 on the seam-bearing
+/// blouses and the bustier, 2 % on the slit skirt, whose corners the strip carries
+/// as a single point.
+#[test]
+fn die_faltung_schert_das_band_nicht() {
+    for (name, toleranz) in [
+        ("bluse2_v26", 1e-4),
+        ("bluse3_v2", 1e-4),
+        ("bustier_v1", 1e-4),
+        ("rock_2schlitze_v34", 2e-2),
+    ] {
+        let Some(netz) = netz(name) else { return };
+        let (s, b) = flach(&netz);
+        let bandstart = netz.teile.iter().map(|t| t.punkte.len()).sum::<usize>();
+        let ist_band = |i: u32| (i as usize) >= bandstart;
+
+        let mut federn = 0usize;
+        let mut schlecht: Vec<(f64, u32, u32)> = Vec::new();
+        for (c, p) in s.abstand.punkte.iter().enumerate() {
+            // Only the band's own springs: a hold to the piece has rest length 0
+            // and is not a length the turn could shear.
+            if !(ist_band(p[0]) && ist_band(p[1])) || s.abstand.ruhe[c] <= 0.0 {
+                continue;
+            }
+            federn += 1;
+            let (i, j) = (p[0] as usize, p[1] as usize);
+            let l = ((s.x[i][0] - s.x[j][0]).powi(2)
+                + (s.x[i][1] - s.x[j][1]).powi(2)
+                + (s.x[i][2] - s.x[j][2]).powi(2))
+            .sqrt();
+            let d = (l - s.abstand.ruhe[c]) / s.abstand.ruhe[c];
+            if d.abs() > toleranz {
+                schlecht.push((d, p[0], p[1]));
+            }
+        }
+        assert!(federn > 0, "{name}: das Band trägt keine Dehnfeder");
+        schlecht.sort_by(|a, b| a.0.abs().partial_cmp(&b.0.abs()).unwrap());
+        eprintln!(
+            "{name}: {federn} Bandfedern, {} über {:.0e} Abweichung{}",
+            schlecht.len(),
+            toleranz,
+            match schlecht.last() {
+                Some(z) => format!(" (schlimmste {:+.3} %)", z.0 * 100.0),
+                None => String::new(),
+            }
+        );
+        assert!(
+            schlecht.is_empty(),
+            "{name}: {} von {federn} Bandfedern über {:.0e} Abweichung, schlimmste {:+.3} % \
+             (b{}–b{}) - die Faltung schert das Band",
+            schlecht.len(),
+            toleranz,
+            schlecht.last().map_or(0.0, |z| z.0 * 100.0),
+            schlecht.last().map_or(0, |z| z.1 as usize - bandstart),
+            schlecht.last().map_or(0, |z| z.2 as usize - bandstart)
+        );
+        assert!(
+            b.falzkanten_gehrung > 0 || b.falzkanten > 0,
+            "{name}: keine Falzkante - das Muster trägt keine Faltung"
         );
     }
 }
