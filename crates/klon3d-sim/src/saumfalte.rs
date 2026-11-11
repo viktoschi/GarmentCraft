@@ -9,11 +9,12 @@
 //! it places them folded:
 //!
 //! * **The fold is a turn.** Every cutting-line point is turned about the fold
-//!   axis through its seam-line point by `π − FALT_START_ABWEICHUNG`. The axis is
-//!   perpendicular to the point's own offset and lies in the piece - the seam
-//!   line *at that point* - so the whole band comes out at the same angle
-//!   whatever its width there. Nothing is re-meshed: the band's points,
-//!   triangles and stretch springs are the ones the mesh built.
+//!   line through its seam-line point by `π − FALT_START_ABWEICHUNG`. The fold
+//!   line is the seam-line edge leaving that point, lying in the piece - not the
+//!   point's own offset, and not a chord across it - so the whole band comes out
+//!   at the same angle whatever its width there, and the offset's component along
+//!   the seam survives the turn instead of being flipped. Nothing is re-meshed:
+//!   the band's points, triangles and stretch springs are the ones the mesh built.
 //! * **The seam line is held, not pinned.** Each band seam-line point lies on
 //!   the piece's boundary, at most 0.1 mm off the boundary polyline (measured on
 //!   all three test patterns). A rest-length-0 distance constraint onto that
@@ -234,6 +235,33 @@ fn kanten(punkte: &[[f64; 2]], dreiecke: &[[u32; 3]]) -> BTreeMap<(u32, u32), (f
     m
 }
 
+/// The seam line's direction at ring point `j`, unit length and in the piece's
+/// plane, or `None` where the seam line has none there.
+///
+/// It is the seam-line edge leaving `j` towards its next point, projected into
+/// the piece: the fold line about which the band at `j` is turned. The outgoing
+/// edge, not a chord through both neighbours and not the point's own offset -
+/// see the note at the turn in [`band_teil`] for why each of those is wrong
+/// where the seam line turns. Where the outgoing edge has no length (the weld
+/// put two seam-line points on one place) the incoming one stands in.
+fn nahtrichtung(innen3: &[[f64; 3]], nrm: [f64; 3], j: usize) -> Option<[f64; 3]> {
+    let n = innen3.len();
+    if n < 3 {
+        return None;
+    }
+    let kante = |a: usize, b: usize| {
+        let mut t = sub(innen3[b % n], innen3[a % n]);
+        t = sub(t, mul(nrm, dot(t, nrm)));
+        let l = dot(t, t).sqrt();
+        if l > 1e-9 {
+            Some(mul(t, 1.0 / l))
+        } else {
+            None
+        }
+    };
+    kante(j, j + 1).or_else(|| kante(j + n - 1, j))
+}
+
 /// The boundary vertex of `ring` that `p` sits on, or `None` when `p` lies
 /// inside a boundary edge.
 ///
@@ -403,14 +431,20 @@ fn band_teil(
     // point stays where the mesh put it, and a cutting-line point turns about the
     // fold axis through its seam-line point `q` by `π − FALT_START_ABWEICHUNG`.
     //
-    // The axis is `normal × offset`, which is the one line that is perpendicular
-    // to the offset and lies in the piece: exactly the seam line *at this point*.
-    // It is taken from the offset itself and needs no neighbour: the seam line can
-    // step around a corner, pinch to no width, or put three points on one place,
-    // and the offset still leaves a fold axis. A chord through the neighbours
-    // instead would give the bisector at a corner, and the offset - which is
-    // perpendicular to neither stretch there - would partly turn into the fold
-    // line and lose band width.
+    // The fold line at this point is the seam-line edge leaving it, taken from
+    // the seam line - not `normal × offset`, and not a chord through the point's
+    // two neighbours. The offset only names the fold line where it is
+    // perpendicular to it. Where the offset also runs *along* the seam - a miter
+    // tip, and every outer point the weld inserted by arc fraction -
+    // `normal × offset` is tilted, the turn flips the offset's component along the
+    // seam instead of leaving it, and the band is sheared: its rest lengths no
+    // longer match the folded place. Measured on a 20 × 20 cm square with a 3 mm
+    // allowance: the diagonal band spring `a0–i1` rests at 13.342 mm, folds to
+    // 7.616 mm (-42.9 %), 60 of 326 band springs were compressed and the band sank
+    // 3.16 mm through the piece. The chord halves that (3 springs, still
+    // -3.1611 mm) because at the ring start it is the corner's bisector; the
+    // outgoing edge leaves one spring (-28.1 %, the single-point corner) and
+    // 0.3737 mm. The detailed note at the turn below has the numbers.
     //
     // A rotation, not a reflection: it keeps the component along the fold line,
     // tips the outward direction to inward and the surface normal to against the
@@ -432,35 +466,53 @@ fn band_teil(
         let j = k as usize - n;
         let q = innen3[j];
         let d = sub(lage(ti, s.aussen[j]), q);
-        // The fold axis at `j`: perpendicular to the offset and in the piece.
-        // `u × d` then points along the piece's reverse, so a turn of `π − ε`
-        // steps the band just past the reverse side on its own.
-        let u = cross(nrm, d);
-        let l = dot(u, u).sqrt();
-        if !(l > 0.0) {
-            // An offset of no length is a seam-line point with no band width
-            // there: it is already on the fold line and folding it is the
-            // identity. Not a refusal, so not counted.
-            if dot(d, d).sqrt() > 0.0 {
-                // A real offset that lies along the piece's normal has no
-                // direction in the plane. Counted, and its fold edges report
+        // The fold axis at `j` is the seam-line edge leaving `j`; the note above
+        // the turn has the measured reason and the numbers.
+        let achse = nahtrichtung(&innen3, nrm, j);
+        let (tang, quer) = match achse {
+            Some(t) => {
+                let a = dot(d, t);
+                (mul(t, a), sub(d, mul(t, a)))
+            }
+            None => ([0.0; 3], d),
+        };
+        let lq = dot(quer, quer).sqrt();
+        if !(lq > 0.0) {
+            // A seam-line point with no band width across the fold: it is already
+            // on the fold line and folding it is the identity. Not a refusal, so
+            // not counted - unless the offset really points out of the piece.
+            let dn = dot(d, nrm).abs();
+            if dn > 0.0 && dn >= dot(d, d).sqrt() * (1.0 - 1e-12) {
+                // An offset that lies along the piece's normal has no direction
+                // in the plane. Counted, and its fold edges report
                 // `falz_falsche_seite`.
                 f.bericht.falz_ohne_richtung += 1;
             }
             pos.push(add(q, d));
             continue;
         }
-        let u = mul(u, 1.0 / l);
-        let quer = d;
+        let mhat = mul(quer, 1.0 / lq);
+        // The tilt axis: the seam-line edge leaving the point. Where the seam line
+        // has no direction there (this point and its successor are one place) the
+        // incoming edge stands in, and failing that the bisector of the offset is
+        // all there is, and it is what an axis had to come from.
+        let u = match achse {
+            Some(t) => t,
+            None => {
+                let u = cross(nrm, mhat);
+                let l = dot(u, u).sqrt();
+                if l > 0.0 { mul(u, 1.0 / l) } else { mhat }
+            }
+        };
         // The step short of half a turn, taken towards the piece's reverse so the
         // band lies *behind* the piece it is folded onto.
-        let spitz = mul(cross(u, quer), FALT_START_ABWEICHUNG.sin());
+        let spitz = mul(cross(u, mhat), lq * FALT_START_ABWEICHUNG.sin());
         let spitz = if dot(spitz, nrm) < 0.0 {
             mul(spitz, -1.0)
         } else {
             spitz
         };
-        pos.push(add(q, add(mul(quer, -FALT_START_ABWEICHUNG.cos()), spitz)));
+        pos.push(add(q, add(tang, add(mul(quer, -FALT_START_ABWEICHUNG.cos()), spitz))));
     }
 
     // Mass, rest matrix and material direction, by the same rules as a pattern
