@@ -44,24 +44,35 @@
 //!    starting state are gone.
 //! 6. **The layering adds no cuts.** After 60 frames at most 10 edges pierce a
 //!    triangle (measured 3; with the 0-holds read as layers 6 at the end). Those
-//!    3 sit at the mitre's crossing arms, same as the pairs above.
+//!    3 sit at the three corners where the contour is cut off instead of
+//!    mitred; the mitre tip would take them to 0 (see below).
 //!
 //! ## What is *not* asserted, and why
 //!
-//! The band's own mitre at a piece corner still self-overlaps: the strip turns
-//! the corner on both sides of the seam line, so at the cutting line the two
-//! arms cross. Measured on the rectangle: 34 band↔band pairs and 7 cuts at t=0,
-//! all within 10 mm of a corner and all 2,4…4,2 mm from the seam line on a 3 mm
-//! band - at the cutting line, not at the fold. The proximity search gives those
-//! pairs the padded rest distance of two layers (`Dicke + Zusatzdicke` = 2,9 mm;
-//! the one-fabric-thickness rule of [`Stoffnetz::band_abstand`] applies to a
-//! band against its **own** carrier, not to two band arms). So with
-//! self-collision the crossing arms push each other down: the deepest point is
-//! −3,15 mm and it is a seam-line point (`i0`), held by four band↔band pairs of
-//! 2,9 mm - the mitre, not the layering. That belongs to the mitre in
-//! `klon3d_mesh::zugabe` and to the band↔band rule of the contact, so the depth
-//! is bounded here and the count is asserted not to grow, rather than required
-//! to equal the fold's or to be zero.
+//! The strip's start point does not fold cleanly, and with self-collision it
+//! sinks. On the rectangle that point is the ring's first one: it is the only
+//! one of the 163 band points that the fold leaves *outside* the piece at t=0
+//! (4,243 mm from the next piece point), the only inner-ring point without a
+//! rest-0 hold, and the corner the strip carries as a single point, where two
+//! fold lines meet. Two arms of the same sheet therefore close on each other
+//! there. After 60 frames it is the deepest point at −3,1471 mm (measured
+//! 11.11.2026) and the depth is bit-identical down to a self-collision padding
+//! of 0 mm, where the four band↔band pairs at that point rest at one fabric
+//! thickness (0,4 mm) instead of 2,9 mm - the padding changes the cut count
+//! (3 → 6), not the depth. So the depth is not the padded band↔band rule; it is
+//! this one point serving two fold lines, which the module cannot represent.
+//! The depth is bounded here and the count is asserted not to grow, rather than
+//! required to equal the fold's or to be zero.
+//!
+//! For the same reason the piece corner where the strip turns is **cut off, not
+//! mitred**: at the three corners where the strip welds two inner-ring vertices
+//! the outer contour runs `(200, −3)` → `(203, 0)` where the true mitre tip
+//! would be `(203, −3)`. Replacing the six outer points by that tip takes the
+//! cuts from 3 to 0 on the rectangle and leaves the depth at −3,1471 mm
+//! unchanged, but it moves the cutting line by `2·3 − 3·√2 = 1,757 mm` per
+//! corner - and the cutting line is what `klon3d umriss`, the DXF writer and
+//! every reference length read. That is a change to the published contour, not
+//! a fix inside the band, so it stays open.
 //!
 //! No body, no gravity: the pattern is the cloth (the device
 //! [`crate::saumfalte`] and `tests/saumfalte.rs` use). Under gravity the whole
@@ -86,17 +97,19 @@ const LAGE_TOLERANZ_MM: f64 = 0.05;
 /// How far a band point may stand above the piece (mm): the band must not lift
 /// off. The 2,9 mm cushion would be far outside.
 const ABHEBE_MM: f64 = 0.1;
-/// Band points deeper than a millimetre under the piece (mm) are the mitre's
-/// crossing arms, counted and bounded, never required to be zero.
+/// Band points deeper than a millimetre under the piece (mm) are counted and
+/// bounded, never required to be zero: they sit at the strip's start point and
+/// at the cut-off corners (measured 8).
 const GEHRUNG_MAX: usize = 10;
 /// The deepest band point **without** self-collision (mm): the fold alone. It is
 /// the single-point corner of the rectangle's ring start, measured −0,374 mm;
 /// before the fold line was the seam-line edge this was −3,161 mm. Bounded at
 /// half a millimetre, one order of magnitude below the old value.
 const FALT_TIEFE_MM: f64 = 0.5;
-/// The deepest band point **with** self-collision (mm). It is the mitre: the
-/// crossing arms of the strip get the padded 2,9 mm rest distance and push the
-/// seam-line point `i0` down. Bounded, not required to match the fold.
+/// The deepest band point **with** self-collision (mm). It is the strip's start
+/// point, the one point the ring carries where two fold lines meet; the depth is
+/// unchanged at a self-collision padding of 0 mm, so it is this point and not the
+/// padded band↔band rule. Bounded, not required to match the fold.
 const GEHRUNG_TIEFE_MM: f64 = 5.0;
 /// A band spring (rest length above 0, both ends band points) that kept its rest
 /// length to within this share of itself. Measured on the rectangle: exactly one
@@ -109,7 +122,8 @@ const FALT_TREUE: f64 = 0.01;
 const FALT_ABWEICHUNG_MAX: usize = 1;
 /// Edge-through-triangle cuts left at the cutting line (measured 3 after 60
 /// frames; with the 0-holds read as layers 6 at the end, 30 over all steps
-/// against 15). The mitre arms keep a few; the layering must not add to them.
+/// against 15). They sit at the three corners the contour cuts off instead of
+/// mitring; the mitre tip takes them to 0. The layering must not add to them.
 const SCHNITTE_MAX: usize = 10;
 
 /// The rectangle with its band folded in, laid flat and without gravity. `fest`
@@ -202,8 +216,9 @@ fn das_band_liegt_eine_stoffdicke_auf_dem_teil() {
         let (a, b) = (seite(1.0), seite(-1.0));
         let ganz_band = |l: &[usize]| !l.is_empty() && l.iter().all(|i| band.contains(i));
         let ganz_teil = |l: &[usize]| !l.is_empty() && l.iter().all(|i| teil.contains(i));
-        // Nur Band gegen eigenen Träger. Band gegen Band ist die Gehrung (siehe
-        // Moduldoc), Teil gegen Teil gibt es auf einem einzelnen Teil nicht.
+        // Nur Band gegen eigenen Träger. Band gegen Band ist der Streifenanfang
+        // und die gekappten Ecken (siehe Moduldoc), Teil gegen Teil gibt es auf
+        // einem einzelnen Teil nicht.
         if !((ganz_band(&a) && ganz_teil(&b)) || (ganz_teil(&a) && ganz_band(&b))) {
             continue;
         }
@@ -280,9 +295,10 @@ fn das_band_liegt_eine_stoffdicke_auf_dem_teil() {
         -soll * 1e3
     );
     assert!(d[d.len() - 1] < ABHEBE_MM, "Band steht {:.3} mm über dem Teil", d[d.len() - 1]);
-    assert!(gehrung <= GEHRUNG_MAX, "{gehrung} Bandpunkte tiefer als 1 mm (Gehrung, gemessen 8)");
-    // Die Gehrung reißt am Schnittrand ein paar Kanten durch Dreiecke; die
-    // Schichtung darf keine dazutun (mit den 0-Federn als Lagen 6 am Ende).
+    assert!(gehrung <= GEHRUNG_MAX, "{gehrung} Bandpunkte tiefer als 1 mm (Streifenanfang und gekappte Ecken, gemessen 8)");
+    // Am Streifenanfang und an den gekappten Ecken reißt der Streifen ein paar
+    // Kanten durch Dreiecke; die Schichtung darf keine dazutun (mit den
+    // 0-Federn als Lagen 6 am Ende).
     let (sn_ende, _) = klon3d_sim::selbstkollision::aus_szene(&s, zusatz);
     let schnitte = klon3d_sim::selbstkollision::finde_schnitte(&sn_ende, &s.x, false).len();
     println!("nach 60 Bildern: {schnitte} Schnitte Kante durch Dreieck (mit den 0-Federn als Lagen 6)");
@@ -330,7 +346,7 @@ fn das_band_liegt_eine_stoffdicke_auf_dem_teil() {
 
     // (4) Ohne Selbstkollision liegt das Band im Teil: der Median in (2) ist die
     //     Stoffdicke, nicht eine Faltung, die das Band abhebt. Der tiefste Punkt
-    //     ist der Eckpunkt aus (3); tiefer als 1 mm geht keiner.
+    //     ist der Streifenanfang aus (3); tiefer als 1 mm geht keiner.
     let mut s = szene(true);
     let mut rw = ImplizitCg::neu(ImplizitParameter { selbstkollision: false, ..ImplizitParameter::default() });
     for _ in 0..60 {
@@ -354,13 +370,13 @@ fn das_band_liegt_eine_stoffdicke_auf_dem_teil() {
     );
     assert!(tief_ohne <= GEHRUNG_MAX, "{tief_ohne} Bandpunkte tiefer als 1 mm ohne Selbstkollision");
 
-    // (5) Mit Selbstkollision ist der tiefste Punkt die Gehrung: dort drücken
-    //     sich die gekreuzten Bandarme (Ruhe 2,9 mm) gegenseitig hinunter. Er
-    //     darf tief sein, aber nicht unbegrenzt.
-    println!("mit Selbstkollision: tiefster Punkt {tief_mit:.3} mm (Gehrung, Grenze {GEHRUNG_TIEFE_MM:.1} mm)");
+    // (5) Mit Selbstkollision ist der tiefste Punkt der Streifenanfang: eine
+    //     Stelle, an der zwei Faltachsen zusammentreffen und die der Ring als
+    //     einen Punkt führt. Er darf tief sein, aber nicht unbegrenzt.
+    println!("mit Selbstkollision: tiefster Punkt {tief_mit:.3} mm (Streifenanfang, Grenze {GEHRUNG_TIEFE_MM:.1} mm)");
     assert!(
         tief_mit > -GEHRUNG_TIEFE_MM,
-        "tiefster Punkt mit Selbstkollision {:.3} mm - tiefer als die Gehrung erklärt",
+        "tiefster Punkt mit Selbstkollision {:.3} mm - tiefer als der Streifenanfang erklärt",
         tief_mit
     );
 }
