@@ -755,5 +755,6 @@ fn band_teil(
         punkte: basis..(basis + neu),
         dreiecke: d0..f.dreiecke.len(),
         vorgabe: vg,
+        band_von: Some(ti),
     });
 }
