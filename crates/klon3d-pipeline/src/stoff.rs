@@ -8,6 +8,12 @@
 //! because the solver cannot run on "not stated" - the parser keeps it as
 //! `None` instead of inventing a zero.
 //!
+//! There are two entry points and one table, because a `.zfab` and a `.zprj`
+//! state a fabric in the same units: [`aus_zfab`] for a file that *is* one
+//! fabric, [`aus_zprj_stoff`] for one fabric out of a project that holds many.
+//! The project side was added in #131 - before that a `.zprj` could hand over
+//! the body but not its fabric.
+//!
 //! The numbers live in `mapPhysical`; the field names and units are the ones
 //! CLO's Property Editor shows ([`MATERIAL.md`], which also lists the values
 //! of all eight files):
@@ -129,6 +135,44 @@ fn aus_zfab(z: &Zfab, stamm: &str, pfad: &Path) -> Result<Material, Fehler> {
         flaechengewicht_kg_m2: pflicht(z.dichte_g_mm3, "fDensity", pfad)? * 1.0e3,
         dicke_m: pflicht(z.dicke_mm, "fThickness", pfad)? * 1.0e-3,
         reibung: pflicht(z.reibung, "fFriction", pfad)?,
+    })
+}
+
+/// Maps a fabric **read from a `.zprj` project** onto the solver's material.
+///
+/// The same `mapPhysical` fields and the same factors as [`aus_zfab`] - a
+/// project and a `.zfab` state a fabric in the same units. The difference is
+/// where the name comes from: a `.zfab` is one fabric and its stem names it,
+/// while a project holds many, so the name is the fabric's own `qsName` and the
+/// caller picks *which* fabric of the project it means.
+///
+/// What is demanded: thickness, areal weight, stretch (weft), shear and bending
+/// (weft). Those are what the solver cannot run without. The two remaining
+/// directions fall back to the weft value, the same rule `aus_zfab` uses for
+/// bending, and a file that does not state its friction gets CLO's default 0.03
+/// - every one of the 207 fabrics in the 47 foreign projects states it, so the
+/// fallback is a decision for future files, not a silent repair of the current
+/// ones.
+pub fn aus_zprj_stoff(
+    s: &klon3d_pattern::zprj::Stoff,
+    pfad: &Path,
+) -> Result<Material, Fehler> {
+    let schuss = pflicht(s.dehnung_schuss, "fSuK", pfad)?;
+    let schub = pflicht(s.schub, "fHK", pfad)?;
+    // Bending weft is demanded once; the two other directions fall back to it
+    // so that no branch can quietly produce a zero stiffness.
+    let biegung = pflicht(s.biegung_schuss, "fBuK", pfad)?;
+    Ok(Material {
+        name: name_static(&s.name),
+        dehnung_n_m: schuss * 1.0e-3,
+        kette_n_m: s.dehnung_kette.unwrap_or(schuss) * 1.0e-3,
+        schub_n_m: schub * 1.0e-3,
+        biegung_nm: biegung * 1.0e-9,
+        biegung_kette_nm: s.biegung_kette.unwrap_or(biegung) * 1.0e-9,
+        biegung_schraege_nm: s.biegung_schraege.unwrap_or(biegung) * 1.0e-9,
+        flaechengewicht_kg_m2: pflicht(s.gewicht_g_m2, "fDensity", pfad)? * 1.0e-3,
+        dicke_m: pflicht(s.dicke_mm, "fThickness", pfad)? * 1.0e-3,
+        reibung: s.reibung.unwrap_or(0.03),
     })
 }
 

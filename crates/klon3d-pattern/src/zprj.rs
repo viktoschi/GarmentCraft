@@ -515,6 +515,21 @@ pub struct Stoff {
     pub biegung_kette: Option<f64>,
     /// `fBhK` - Biegung unter 45°, gleiche Einheit.
     pub biegung_schraege: Option<f64>,
+    /// Dehnsteifigkeit **in Schussrichtung** (`fSuK`) in g/s² = mN/m, wie
+    /// CLO sie speichert; der Aufrufer rechnet `× 10⁻³` nach N/m.
+    ///
+    /// Ohne Dehnung, Schub und Reibung war ein Projektstoff nur eine Anzeige:
+    /// `anziehen --zprj` nahm den Körper aus dem Projekt, den Stoff aber
+    /// weiter aus `--material`. Zusammen mit [`Self::schub`] und
+    /// [`Self::reibung`] kann ein `.zprj` seinen eigenen Stoff stellen.
+    pub dehnung_schuss: Option<f64>,
+    /// `fSvK` - Dehnung in Kettrichtung, gleiche Einheit.
+    pub dehnung_kette: Option<f64>,
+    /// `fHK` - Schub, gleiche Einheit. Bei Latex halb so groß wie die Dehnung
+    /// (`MATERIAL.md`).
+    pub schub: Option<f64>,
+    /// `fFriction` - Reibungszahl, dimensionslos.
+    pub reibung: Option<f64>,
 }
 
 // ─────────────────────────────────────────────────────── Lesen ──
@@ -848,6 +863,10 @@ fn lies_stoffe(wurzel: &Map) -> Result<Vec<Stoff>, ZprjFehler> {
                 biegung_schuss: physik.and_then(|p| komma(p, "fBuK")),
                 biegung_kette: physik.and_then(|p| komma(p, "fBvK")),
                 biegung_schraege: physik.and_then(|p| komma(p, "fBhK")),
+                dehnung_schuss: physik.and_then(|p| komma(p, "fSuK")),
+                dehnung_kette: physik.and_then(|p| komma(p, "fSvK")),
+                schub: physik.and_then(|p| komma(p, "fHK")),
+                reibung: physik.and_then(|p| komma(p, "fFriction")),
             }
         })
         .collect())

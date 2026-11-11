@@ -39,6 +39,7 @@ mod bewegen;
 mod fadenlauf;
 mod stoffwahl;
 mod umriss;
+mod zprj_stoff;
 
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
@@ -2260,6 +2261,21 @@ fn befehl_zprj(args: &[String]) -> ExitCode {
                 }
                 _ => println!("      Biegung Schuss/Kette/Schraege -"),
             }
+            // Stretch, shear and friction in CLO's unit, one line: the values
+            // a project fabric needs to become a solver material at all.
+            // `-` per missing field, so a half-filled fabric shows which half
+            // is there.
+            let z = |v: Option<f64>| {
+                v.map(|x| format!("{x:.2}"))
+                    .unwrap_or_else(|| "-".into())
+            };
+            println!(
+                "      Dehnung S/K {}/{}, Schub {}, Reibung {}",
+                z(s.dehnung_schuss),
+                z(s.dehnung_kette),
+                z(s.schub),
+                z(s.reibung)
+            );
         }
     }
 
