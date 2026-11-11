@@ -291,3 +291,22 @@ material model is confirmed.
   An open point is the rest: `Zfab` carries more than `Material` holds (buckling,
   damping), and none of it is used yet. The nonlinear curves stay unread
   (§ "The CLO fields and their latex values").
+- **A `.zprj` project states the same values, and since #131 they reach the
+  solver too.** `Projekt::stoffe` carries the three bending values (`fBuK`,
+  `fBvK`, `fBhK`, #129/#131) plus `fSuK`, `fSvK`, `fHK` and `fFriction`;
+  `klon3d zprj <project> --stoffe` prints them, and `klon3d anziehen
+  <pattern.sm2d> --zprj <project> --zprj-stoff <name>` maps one of them with
+  `stoff::aus_zprj_stoff` — the same factors as the `.zfab` path. All nine
+  values agree to rel < 1e-6 against both the `.zfab` and `RADICAL_RUBBER_04`,
+  so the two containers are one source in two wrappers. That bound is the
+  project's own resolution: it stores `f32`, while the constant carries
+  decimals — `crates/klon3d-pipeline/tests/zprj_stoff.rs` tests it, it does not
+  assume it. **Friction**: all 207 fabrics in the 47 third-party
+  projects state `fFriction`, and all of them state CLO's default 0.03 — that
+  is the program's value, not a measurement, and a missing one falls back to it
+  (§ "Friction").
+  **One fabric per run, not one per piece**: pieces carry an
+  `iFabricIndex` each (from `mapFabricShape2D`; 6/18/2/5 of 31 in the reference
+  project), but they are named by CLO (`Pattern_999671`) while a pattern and its
+  placement file use the `.sm2d` names — the two namings have no correspondence,
+  so a per-piece fabric cannot be assigned from a project without inventing one.

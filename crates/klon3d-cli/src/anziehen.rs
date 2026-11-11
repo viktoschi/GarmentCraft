@@ -43,7 +43,7 @@ use klon3d_sim::{
 
 const AUFRUF: &str = "Aufruf: klon3d anziehen <muster.sm2d> [--masse <datei.smis>] [--zprj <projekt.zprj>] [--naehte <datei>] \
                       [--lage <datei>] [--naehen <m/s>] [--schwerkraft-naehen <anteil>] [--naht-k <N/m>] [--cg-max <n>] [--naehbilder <n>] [--einschwingen-min <n>] [--einschwingen-max <n>] [--ohne-koerperpunkte] [--ohne-weite] [--offen] \
-                      [--material <profil|datei.zfab|stamm>] [--obj <ordner>] [--abstand <ordner>] [--dehnung <ordner>] [--spannung <ordner>] [--nahtlage <ordner>] [--farben <ordner>] [--ordner <Resizing>] \
+                      [--material <profil|datei.zfab|stamm>] [--zprj-stoff <name>] [--obj <ordner>] [--abstand <ordner>] [--dehnung <ordner>] [--spannung <ordner>] [--nahtlage <ordner>] [--farben <ordner>] [--ordner <Resizing>] \
                       [--rechenweg implizit|gpu|xpbd] [--selbstkollision [--schnitte-an-naehten]] [--anfang <lage.obj>] [--bilder <ordner>] [--zeiten <datei>]";
 
 fn fehler(m: impl std::fmt::Display) -> ExitCode {
@@ -58,6 +58,11 @@ pub fn befehl_anziehen(args: &[String]) -> ExitCode {
     let mut gegen_lage: Option<PathBuf> = None;
     let mut ohne_weite = false;
     let mut zprj: Option<PathBuf> = None;
+    // Which fabric of that project (#131). Without it the fabric still comes
+    // from `--material`, so a run from before this option keeps its material.
+    let mut zprj_stoff: Option<String> = None;
+    // Two sources for one fabric: naming both would let one silently win.
+    let mut stoff_genannt = false;
     let mut resizing = ordner();
     let mut ablauf = Anziehen::default();
     let mut material: Material = RADICAL_RUBBER_04;
@@ -121,6 +126,7 @@ pub fn befehl_anziehen(args: &[String]) -> ExitCode {
         match a {
             "--masse" => masse = Some(PathBuf::from(w)),
             "--zprj" => zprj = Some(PathBuf::from(w)),
+            "--zprj-stoff" => zprj_stoff = Some(w.to_string()),
             "--naehte" => naehte = Some(PathBuf::from(w)),
             "--lage" => lage = Some(PathBuf::from(w)),
             "--gegen-lage" => gegen_lage = Some(PathBuf::from(w)),
@@ -175,7 +181,10 @@ pub fn befehl_anziehen(args: &[String]) -> ExitCode {
                 Err(_) => return fehler(format!("--naehen {w:?}: keine Zahl")),
             },
             "--material" => match stoff_waehlen(w) {
-                Ok(m) => material = m,
+                Ok(m) => {
+                    material = m;
+                    stoff_genannt = true;
+                }
                 Err(e) => return fehler(e),
             },
             _ => return fehler(format!("unbekannte Option {a:?}\n{AUFRUF}")),
@@ -183,6 +192,64 @@ pub fn befehl_anziehen(args: &[String]) -> ExitCode {
         i += 2;
     }
     let Some(muster_pfad) = muster_pfad else { return fehler(AUFRUF) };
+
+    // The fabric from the project (#131): `--zprj-stoff` picks one out of the
+    // project `--zprj` already names. Before this, `--zprj` gave the body and
+    // `--material` had to give the fabric, so a project's own stretch, shear
+    // and bending never reached the solver.
+    if zprj_stoff.is_some() && zprj.is_none() {
+        return fehler("--zprj-stoff ohne --zprj: der Stoff kommt aus dem Projekt, das --zprj nennt");
+    }
+    if zprj_stoff.is_some() && stoff_genannt {
+        return fehler(
+            "--material und --zprj-stoff zusammen: beide nennen den Stoff, und welcher gilt, \
+             waere eine stille Entscheidung - nimm einen von beiden",
+        );
+    }
+    // Report lines of the fabric source, printed with the rest of the report
+    // below so that they stand under the header and not above it.
+    let mut stoffherkunft: Option<(String, Option<String>)> = None;
+    if let (Some(n), Some(pfad)) = (&zprj_stoff, &zprj) {
+        let projekt = match klon3d_pattern::zprj::Projekt::lies(pfad) {
+            Ok(p) => p,
+            Err(e) => return fehler(format!("{}: {e}", pfad.display())),
+        };
+        material = match crate::zprj_stoff::stoff_aus_projekt(&projekt, Some(n), pfad) {
+            Ok(m) => m,
+            Err(e) => return fehler(e),
+        };
+        let stuecke = crate::zprj_stoff::stuecke_je_stoff(&projekt);
+        let namen: Vec<String> = projekt
+            .stoffe
+            .iter()
+            .zip(&stuecke)
+            .map(|(s, n)| format!("{} ({} Teile)", s.name, n))
+            .collect();
+        // Said out loud, because it is a limit of this version and not a
+        // property of the project: the pieces carry a fabric index, but their
+        // names are CLO's, not the pattern's.
+        let hinweis = (stuecke.iter().filter(|n| **n > 0).count() > 1).then(|| {
+            "das Projekt gibt seinen Teilen verschiedene Stoffe; der Lauf nimmt einen fuer alle \
+             - die Teilnamen des Projekts sind CLOs, nicht die des Musters"
+                .to_string()
+        });
+        stoffherkunft = Some((
+            format!("Stoffquelle  {} -> {}", pfad.display(), namen.join(", ")),
+            hinweis,
+        ));
+    } else if let Some(pfad) = &zprj {
+        // `--zprj` without `--zprj-stoff`: the body comes from the project, the
+        // fabric does not. Said out loud, because "Material white latex" next to
+        // a project would otherwise read as if the project had supplied it.
+        stoffherkunft = Some((
+            format!(
+                "Stoff         nicht aus {} - der Koerper kommt aus dem Projekt, der Stoff aus \
+                 --material bzw. dem eingebauten Profil (--zprj-stoff nennt einen Stoff des Projekts)",
+                pfad.display()
+            ),
+            None,
+        ));
+    }
 
     // Pattern, seam list, mesh, placement file and body all come from the
     // library chain (`klon3d_pipeline`); this command only adds its options
@@ -267,6 +334,12 @@ pub fn befehl_anziehen(args: &[String]) -> ExitCode {
 
     println!("{}", muster_pfad.display());
     println!("  Körper       {}", herkunft);
+    if let Some((quelle, hinweis)) = &stoffherkunft {
+        println!("  {quelle}");
+        if let Some(h) = hinweis {
+            println!("  Hinweis      {h}");
+        }
+    }
     println!("  Nahtliste    {} ({} Nähte)", naehte_pfad.display(), netz.naehte.len());
     println!("  Lage         {} ({} Teile platziert, Abstand {:.1} cm)", lage_pfad.display(), p.netz.teile.len(), liste.abstand * 100.0);
     if !p.weggelassen.is_empty() {
