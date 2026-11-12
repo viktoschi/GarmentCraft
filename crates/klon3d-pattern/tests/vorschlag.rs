@@ -6,7 +6,7 @@ use std::path::PathBuf;
 
 use klon3d_pattern::geom::Auswertung;
 use klon3d_pattern::kanten::Kurvenquelle;
-use klon3d_pattern::naehte::{lies_nahtliste, Nahtdef};
+use klon3d_pattern::naehte::{lies_nahtliste, Abschnittsbezug, Nahtdef};
 use klon3d_pattern::vorschlag::{spiegelung, vergleiche, verdrehte_naehte};
 use klon3d_pattern::Pattern;
 
@@ -27,12 +27,12 @@ fn sortiert(mut v: Vec<String>) -> Vec<String> {
 }
 
 /// Bluse3, Bluse1, Bustier und Rock: jede Kante der Handliste an dieselben
-/// Gegenkanten, nichts verdreht; zu viel nur die Schlitze des Rocks (20
-/// Kanten, zugenäht). Der Bolero näht seine Falten noch nicht: dort nur
-/// nichts Falsches.
+/// Gegenkanten, nichts verdreht, nichts zu viel — auch die Schlitze des Rocks
+/// nicht, die ihre Punktnamen verraten. Der Bolero näht seine Falten noch
+/// nicht: dort nur nichts Falsches.
 #[test]
 fn nahtvorschlag_trifft_handlisten() {
-    for (name, zuviel) in [("bluse3_v2", 0), ("bluse1_v25", 0), ("bustier_v1", 0), ("hexen_2026_10_27/rock_v36", 20), ("hexen_2026_10_27/bolero_v37", 0)] {
+    for (name, zuviel) in [("bluse3_v2", 0), ("bluse1_v25", 0), ("bustier_v1", 0), ("hexen_2026_10_27/rock_v36", 0), ("hexen_2026_10_27/bolero_v37", 0)] {
         let (m, mess, soll) = pruefmuster(name);
         let ev = Auswertung::lade(&m, &mess).unwrap();
         let v = ev.schlage_naehte_vor(Q).unwrap();
@@ -111,6 +111,37 @@ fn spiegelung_aus_den_naehten() {
                 .collect()
         )
     );
+}
+
+/// Die Schlitze des Rocks bleiben offen: bis zum Kniepunkt (`KN…`) wird
+/// genäht, darunter nicht. Die Bundmarken `B_Schlitz_…` heißen genauso, liegen
+/// aber mitten in einer Naht und teilen sie nicht — sonst risse der Bund auf.
+#[test]
+fn schlitze_bleiben_offen() {
+    let (m, mess, _) = pruefmuster("hexen_2026_10_27/rock_v36");
+    let ev = Auswertung::lade(&m, &mess).unwrap();
+    let v = ev.schlage_naehte_vor(Q).unwrap();
+    // Die Schlitzkante läuft vom Kniepunkt zum Saum; ihre inneren Punkte
+    // heißen PZ_CF_u1 … PZ_CF_u4.
+    let zum_saum = |z: &Abschnittsbezug| z.von.contains("KN") && (z.bis.contains("PZ_CF_u") || z.bis.starts_with("H0_CF"));
+    for d in &v.naehte {
+        for z in d.a.iter().chain(&d.b) {
+            assert!(!zum_saum(z), "{}: näht den Schlitz zu: {} -> {}", d.kennung, z.von, z.bis);
+        }
+    }
+    // Über dem Knie wird genäht: die zwei Mittelnähte enden dort, je beidseits.
+    let am_knie = v
+        .naehte
+        .iter()
+        .flat_map(|d| d.a.iter().chain(&d.b))
+        .filter(|z| z.von.contains("KN") || z.bis.contains("KN"))
+        .count();
+    assert_eq!(am_knie, 4, "vordere und hintere Mitte enden am Knie, je beidseits");
+    // Der Bund läuft über seine Marken hinweg, statt dort zu enden.
+    let bund = |von: &str, bis: &str| {
+        v.naehte.iter().any(|d| d.a.iter().chain(&d.b).any(|z| z.von.starts_with(von) && z.bis.starts_with(bis)))
+    };
+    assert!(bund("B_CB_links", "B_CB_rechts"), "Bund nicht am Stück genäht");
 }
 
 /// Aufgelegte Teile nähen nicht: der Keyhole-Trim der Bluse1 (teilt mit dem

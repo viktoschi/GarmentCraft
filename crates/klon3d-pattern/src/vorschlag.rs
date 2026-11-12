@@ -19,6 +19,15 @@
 //!    aneinander; die freien Ketten, die dort beginnen oder enden, werden
 //!    verbunden (Schulter über zwei Teile, Armloch, Seitennaht über drei) und
 //!    wie eine Kette gepaart, bis nichts mehr dazukommt.
+//! 5. **Schlitze:** Ein Schlitz steht nicht im Muster — er trägt dieselbe
+//!    Zugabe und dieselben Kerben wie die Naht darüber; nur der Name seines
+//!    Punktes sagt, dass dort ein Ende ist (`KN…` wie Knie, `…Schlitz`,
+//!    `SLIT…`). Eine Kette, die an einem solchen Punkt in eine freie Kante
+//!    ausläuft, ist die Schlitzkante und wird nicht genäht. Geteilt wird nur,
+//!    wenn genau ein Kettenende am Saum liegt: ein Bund führt denselben Namen
+//!    als Marke mitten in der Naht und bleibt am Stück (Rock v36). Die Regel
+//!    ist eine Annahme über die Punktnamen, keine Messung; heißt ein Schlitz
+//!    anders, wird er weiter zugenäht.
 //!
 //! Die Richtung folgt den Kerben oder gemeinsamen Punkten; passen beide$
 //! Richtungen, die, in der die Enden relativ zur Mitte wie gezeichnet liegen.
@@ -60,6 +69,9 @@ struct Kette {
     ganz: bool,
     /// Zugabe 0 an allen Kanten, in einem Teil, das Zugaben trägt.
     frei: bool,
+    /// Schlitzkante: beginnt an einem Schlitzpunkt und läuft in eine freie
+    /// Kante aus. Wird nicht genäht (siehe [`ist_schlitzname`]).
+    oeffnung: bool,
     /// Punktknoten im Inneren mit ihrem Abstand vom Anfang.
     innen: Vec<(usize, f64)>,
     /// Randkanten der Kette.
@@ -140,6 +152,16 @@ fn richtung(p: &[Pt], am_anfang: bool, min: f64) -> Option<(f64, f64)> {
             i -= 1;
         }
     }
+}
+
+/// Schlitzpunkt nach dem Punktnamen: `KN_CF` (Knie, wo der Schlitz beginnt),
+/// `TL1_Schlitz`, `SLIT…`. Der Schlitz selbst steht nicht im Muster — er trägt
+/// dieselbe Zugabe und dieselbe Kerbenart wie die Naht darüber; nur der Name
+/// sagt, dass dort ein Ende ist. Geprüft an den Mustern mit Schlitz
+/// (`rock_v36`, `rock_2schlitze_v34`).
+pub(crate) fn ist_schlitzname(name: &str) -> bool {
+    let n = name.to_lowercase();
+    n.split(|c: char| !c.is_alphanumeric()).any(|w| matches!(w, "kn" | "slit" | "schlitz" | "schlitze"))
 }
 
 pub(crate) fn seitenwort(name: &str) -> Option<bool> {
@@ -264,9 +286,9 @@ impl Auswertung<'_> {
             // Bruchstellen: Ecken und Wechsel nähbar/frei.
             let bruch: Vec<usize> = (0..n).filter(|&i| ecke[i] || naehbar[i] != naehbar[(i + n - 1) % n]).collect();
             let starts: Vec<usize> = if bruch.is_empty() { vec![0] } else { bruch.clone() };
-            for (s, &anfang) in starts.iter().enumerate() {
-                let frei = !naehbar[anfang];
-                let ende = if bruch.is_empty() { anfang } else { starts[(s + 1) % starts.len()] };
+            // Eine Kette von Punktknoten `anfang` vorwärts bis `ende` (ohne die
+            // Kante `ende`): Länge, Kerben, Verlauf, Innenpunkte, Kanten.
+            let baue = |anfang: usize, ende: usize| {
                 let mut laenge = 0.0;
                 let mut kerben = Vec::new();
                 let (mut innen, mut kk) = (Vec::new(), Vec::new());
@@ -301,7 +323,42 @@ impl Auswertung<'_> {
                         break;
                     }
                 }
-                ketten.push(Kette { teil: ti, von: anfang, bis: ende, laenge, kerben, gerade, ganz: anfang == ende, frei, innen, kanten: kk });
+                (laenge, kerben, gerade, innen, kk)
+            };
+            for (s, &anfang) in starts.iter().enumerate() {
+                let frei = !naehbar[anfang];
+                let ende = if bruch.is_empty() { anfang } else { starts[(s + 1) % starts.len()] };
+                // Stößt ein Kettenende an eine freie Kante (Saum)?
+                let (start_frei, ende_frei) = (!naehbar[(anfang + n - 1) % n], !naehbar[ende % n]);
+                // Öffnung: Die ganze Kette ist eine Schlitzkante, wenn sie an
+                // einem Schlitzpunkt beginnt oder endet und das andere Ende am
+                // Saum liegt.
+                let oeffnung = !frei
+                    && ((ist_schlitzname(&r.punktknoten[anfang].name) && ende_frei)
+                        || (ist_schlitzname(&r.punktknoten[ende].name) && start_frei));
+                // Ein Schlitzpunkt im Inneren teilt die Kette: darunter der
+                // Schlitz, darüber die Naht. Der Schlitz steht nicht im Muster —
+                // dieselbe Zugabe und dieselben Kerben wie die Naht, nur der
+                // Name sagt es. Geteilt wird nur, wenn genau ein Kettenende an
+                // den Saum stößt: der Bund trägt denselben Namen als Marke und
+                // hat an beiden Enden nähbare Nachbarn.
+                let teilung = if !frei && start_frei != ende_frei {
+                    (anfang..).map(|i| i % n).take_while(|&i| i != ende).skip(1).find(|&i| ist_schlitzname(&r.punktknoten[i].name))
+                } else {
+                    None
+                };
+                match teilung {
+                    Some(sp) => {
+                        let (l0, k0, g0, i0, kk0) = baue(anfang, sp);
+                        ketten.push(Kette { teil: ti, von: anfang, bis: sp, laenge: l0, kerben: k0, gerade: g0, ganz: false, frei, oeffnung: start_frei, innen: i0, kanten: kk0 });
+                        let (l1, k1, g1, i1, kk1) = baue(sp, ende);
+                        ketten.push(Kette { teil: ti, von: sp, bis: ende, laenge: l1, kerben: k1, gerade: g1, ganz: false, frei, oeffnung: ende_frei, innen: i1, kanten: kk1 });
+                    }
+                    None => {
+                        let (laenge, kerben, gerade, innen, kk) = baue(anfang, ende);
+                        ketten.push(Kette { teil: ti, von: anfang, bis: ende, laenge, kerben, gerade, ganz: anfang == ende, frei, oeffnung, innen, kanten: kk });
+                    }
+                }
             }
         }
 
@@ -332,6 +389,7 @@ impl Auswertung<'_> {
                         gerade: c.gerade,
                         ganz: false,
                         frei: c.frei,
+                        oeffnung: c.oeffnung,
                         innen: c.innen.iter().filter(|&&(_, x)| x > d0 + 1e-9 && x < d1 - 1e-9).map(|&(i, x)| (i, x - d0)).collect(),
                         kanten: c.kanten[erste..erste + anzahl].to_vec(),
                     });
@@ -440,6 +498,12 @@ impl Auswertung<'_> {
         // beide Ketten bleiben ungenäht. Bei einer Naht liegen die Teile
         // beidseits der gemeinsamen Kante.
         let mut auflage = vec![false; ketten.len()];
+        // Schlitzkanten werden nie genäht (siehe `Kette::oeffnung`).
+        for (m, e) in ketten.iter().enumerate() {
+            if e.oeffnung {
+                auflage[m] = true;
+            }
+        }
         for i in 0..ketten.len() {
             for j in i + 1..ketten.len() {
                 let (c, d) = (&ketten[i], &ketten[j]);
