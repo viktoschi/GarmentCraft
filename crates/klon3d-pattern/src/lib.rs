@@ -29,6 +29,7 @@ pub mod formula;
 pub mod boegen;
 pub mod fadenlauf;
 pub mod geom;
+pub mod innenpfad;
 pub mod kanten;
 pub mod kontur;
 pub mod kurven;
@@ -50,8 +51,9 @@ pub mod zprj;
 
 pub use formula::{eval_str, Context, Expression, FormulaError, MapContext};
 pub use model::{
-    Arc, Calculation, DraftBlock, Increment, Line, Modeling, PathPoint, Pattern, Piece,
-    PieceNode, PieceNodes, Point, Spline, Unit,
+    Arc, Calculation, DraftBlock, Increment, InnerPath, InnerPathNode, InnerPathNodes,
+    InnerPathRef, InnerPathRefs, Line, Modeling, PathPoint, Pattern, Piece, PieceNode, PieceNodes,
+    Point, Spline, Unit,
 };
 pub use parse::{read_path, read_str};
 pub use smis::{lies_smis, lies_smis_str, Einheit, Smis};

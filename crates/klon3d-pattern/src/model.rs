@@ -131,6 +131,52 @@ pub struct Modeling {
     /// Modellierobjekte einen Bogen, und ohne sie reißt die Konturkette.
     #[serde(rename = "arc", default)]
     pub arcs: Vec<Arc>,
+    /// Inner paths (`<path>`): drawn lines that are not part of the seam line —
+    /// glue zones, decoration, a head opening to cut out. A piece reaches them
+    /// through `<iPaths>`, see [`crate::innenpfad`].
+    #[serde(rename = "path", default)]
+    pub paths: Vec<InnerPath>,
+}
+
+// ─────────────────────────────────────────────────────── Innenpfade ──
+
+/// An inner path: a chain of modelling objects that Seamly2D draws on the
+/// piece but does not use as an outline.
+#[derive(Debug, Clone, Default, Deserialize)]
+pub struct InnerPath {
+    #[serde(rename = "@id")]
+    pub id: String,
+    #[serde(rename = "@name", default)]
+    pub name: Option<String>,
+    /// `true`: cut it out (a hole in the piece, e.g. a head opening). Missing
+    /// counts as `false`; 6 120 of 16 844 paths in the measured stock omit it.
+    #[serde(rename = "@cut", default)]
+    pub cut: Option<String>,
+    /// The only type seen in 16 844 paths: `2`.
+    #[serde(rename = "@type", default)]
+    pub kind: Option<String>,
+    #[serde(rename = "nodes", default)]
+    pub nodes: Option<InnerPathNodes>,
+}
+
+#[derive(Debug, Clone, Default, Deserialize)]
+pub struct InnerPathNodes {
+    #[serde(rename = "node", default)]
+    pub items: Vec<InnerPathNode>,
+}
+
+/// One node of an inner path — a reference to a modelling object, resolved the
+/// same way a piece node is ([`crate::kontur::Auswertung::modeling_index`]).
+#[derive(Debug, Clone, Default, Deserialize)]
+pub struct InnerPathNode {
+    #[serde(rename = "@idObject")]
+    pub id_object: String,
+    /// `NodePoint`, `NodeArc`, `NodeSpline` or `NodeSplinePath`.
+    #[serde(rename = "@type", default)]
+    pub kind: String,
+    /// `1` reverses the running direction of a curve node.
+    #[serde(rename = "@reverse", default)]
+    pub reverse: Option<String>,
 }
 
 /// Eine Operation (`<operation>`): verschiebt, dreht oder spiegelt die
@@ -479,6 +525,25 @@ pub struct Piece {
     /// even with `visible="false"`.
     #[serde(rename = "grainline", default)]
     pub grainline: Option<Grainline>,
+    /// `<iPaths>`: the ids of the inner paths this piece carries, in file
+    /// order. The paths themselves live in the block's `modeling` part; see
+    /// [`crate::innenpfad`].
+    #[serde(rename = "iPaths", default)]
+    pub i_paths: Vec<InnerPathRefs>,
+}
+
+/// The `<iPaths>` block of a piece: references only, no geometry.
+#[derive(Debug, Clone, Default, Deserialize)]
+pub struct InnerPathRefs {
+    #[serde(rename = "record", default)]
+    pub paths: Vec<InnerPathRef>,
+}
+
+#[derive(Debug, Clone, Default, Deserialize)]
+pub struct InnerPathRef {
+    /// The `id` of an [`InnerPath`] in the same block.
+    #[serde(rename = "@path")]
+    pub path: String,
 }
 
 // ────────────────────────────────────────────────────────── Grainline ──

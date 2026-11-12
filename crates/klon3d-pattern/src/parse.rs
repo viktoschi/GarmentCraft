@@ -36,7 +36,8 @@ use quick_xml::events::{BytesStart, Event};
 
 use crate::model::{
     Arc, Calculation, CsaNode, CustomSeamAllowance, DraftBlock, Grainline, Increments, Increment,
-    Line, Modeling, Operation, PathPoint, Pattern, Piece, PieceNode, PieceNodes, Point, Spline,
+    InnerPath, InnerPathNode, InnerPathNodes, InnerPathRef, InnerPathRefs, Line, Modeling,
+    Operation, PathPoint, Pattern, Piece, PieceNode, PieceNodes, Point, Spline,
 };
 use crate::PatternError;
 
@@ -101,6 +102,13 @@ enum Ctx {
     Spline(Fach, usize),
     /// Innerhalb eines `<node>`-Paars (`<node></node>` statt `<node/>`).
     Node,
+    /// Innerhalb eines `<path>` im `<modeling>`: Stelle des Pfades in
+    /// `Modeling::paths` des zuletzt geöffneten Blocks.
+    InnerPfad(usize),
+    /// Innerhalb der `<nodes>` eines Innenpfades: derselbe Index.
+    InnereKnoten(usize),
+    /// Innerhalb der `<iPaths>` eines Teils: die Verweise sammeln.
+    Ipaths,
     /// Innerhalb von `<operation>`; in `<source>` (false) bzw.
     /// `<destination>` (true) die `<item>`-Liste.
     Operation,
@@ -179,9 +187,11 @@ fn schliesse(name: &str, stapel: &mut Vec<Ctx>) {
     ) {
         stapel.pop();
     }
-    // Nur schließen, was geöffnet wurde: `<operation>` außerhalb des
-    // Rechenteils und `<source>`/`<destination>` anderswo legen nichts ab.
+    // Nur schließen, was geöffnet wurde: `<path>` außerhalb des Modellierteils
+    // und `<source>`/`<destination>` anderswo legen nichts ab.
     let offen = match name {
+        "path" => matches!(stapel.last(), Some(Ctx::InnerPfad(_))),
+        "iPaths" => matches!(stapel.last(), Some(Ctx::Ipaths)),
         "operation" => matches!(stapel.last(), Some(Ctx::Operation)),
         "source" | "destination" => matches!(stapel.last(), Some(Ctx::OpListe(_))),
         _ => false,
@@ -495,6 +505,28 @@ fn parse(xml: &str) -> Result<Pattern, PatternError> {
                         }
                     }
 
+                    // ── Innenpfade ──
+                    //
+                    // `<path>` steht im `<modeling>` und ist **keine**
+                    // Nahtlinie: Klebezonen, Verzierungen, ein auszuschneidendes
+                    // Loch. Welches Teil ihn trägt, sagt dessen `<iPaths>`.
+                    "path" => {
+                        if in_konstruktion(&stapel) != Some(true) {
+                            break 'start;
+                        }
+                        let mut pfad = from_map!(InnerPath, &m, name => "name",
+                            cut => "cut", kind => "type");
+                        pfad.id = mstr(&m, "id").unwrap_or_default();
+                        let Some(b) = bloecke.last_mut() else {
+                            return Err(PatternError::Xml(
+                                "Innenpfad ausserhalb eines draftBlock".into(),
+                            ));
+                        };
+                        let v = &mut b.modeling.get_or_insert_with(Modeling::default).paths;
+                        v.push(pfad);
+                        stapel.push(Ctx::InnerPfad(v.len() - 1));
+                    }
+
                     // ── Schnittteile ──
                     //
                     // `<pieces>` steht **innerhalb** von `<draftBlock>`; die
@@ -533,17 +565,63 @@ fn parse(xml: &str) -> Result<Pattern, PatternError> {
                     // (`<modeling><path><nodes>`) sind eigene Objekte; bis
                     // 20.10.2026 hingen ihre Knoten am zuletzt gelesenen Teil —
                     // daher der Bund des Rocks v34 mit 22 m Naht.
-                    "nodes" => stapel.push(Ctx::Nodes(
-                        if stapel.iter().any(|c| matches!(c, Ctx::Pieces(_))) {
-                            teile.len().saturating_sub(1)
-                        } else {
-                            usize::MAX
-                        },
-                    )),
+                    "nodes" => stapel.push(match stapel.last() {
+                        Some(Ctx::InnerPfad(i)) => Ctx::InnereKnoten(*i),
+                        _ => Ctx::Nodes(
+                            if stapel.iter().any(|c| matches!(c, Ctx::Pieces(_))) {
+                                teile.len().saturating_sub(1)
+                            } else {
+                                usize::MAX
+                            },
+                        ),
+                    }),
                     "CSA" => stapel.push(Ctx::Csa(teile.len().saturating_sub(1))),
                     "node" => {
-                        knoten_anhaengen(&stapel, &mut teile, &m);
+                        // Ein Knoten eines Innenpfades hängt an diesem Pfad,
+                        // nicht an einem Teil.
+                        match stapel.last() {
+                            Some(Ctx::InnereKnoten(i)) => {
+                                let mut n = from_map!(InnerPathNode, &m, reverse => "reverse");
+                                n.id_object = mstr(&m, "idObject").unwrap_or_default();
+                                n.kind = mstr(&m, "type").unwrap_or_default();
+                                if let Some(b) = bloecke.last_mut() {
+                                    if let Some(p) = b
+                                        .modeling
+                                        .as_mut()
+                                        .and_then(|mo| mo.paths.get_mut(*i))
+                                    {
+                                        p.nodes
+                                            .get_or_insert_with(InnerPathNodes::default)
+                                            .items
+                                            .push(n);
+                                    }
+                                }
+                            }
+                            _ => knoten_anhaengen(&stapel, &mut teile, &m),
+                        }
                         stapel.push(Ctx::Node);
+                    }
+
+                    // `<iPaths>` eines Teils: nur Verweise auf Innenpfade.
+                    "iPaths" => {
+                        if !stapel.iter().any(|c| matches!(c, Ctx::Pieces(_))) {
+                            break 'start;
+                        }
+                        if let Some(teil) = teile.last_mut() {
+                            teil.i_paths.push(InnerPathRefs::default());
+                        }
+                        stapel.push(Ctx::Ipaths);
+                    }
+                    "record" => {
+                        if !matches!(stapel.last(), Some(Ctx::Ipaths)) {
+                            break 'start;
+                        }
+                        let Some(ziel) = mstr(&m, "path") else { break 'start };
+                        if let Some(teil) = teile.last_mut() {
+                            if let Some(block) = teil.i_paths.last_mut() {
+                                block.paths.push(InnerPathRef { path: ziel });
+                            }
+                        }
                     }
 
                     // The piece's grainline — self-closing, attributes only,
