@@ -37,6 +37,7 @@
 mod anziehen;
 mod bewegen;
 mod fadenlauf;
+mod innenpfade;
 mod stoffwahl;
 mod umriss;
 mod zprj_stoff;
@@ -59,6 +60,7 @@ fn main() -> ExitCode {
         "info" => befehl_info(&args[1..]),
         "punkte" => befehl_punkte(&args[1..]),
         "umriss" => befehl_umriss(&args[1..]),
+        "innenpfade" => innenpfade::befehl_innenpfade(&args[1..]),
         "stoelle" => befehl_stoelle(&args[1..]),
         "dxf" => befehl_dxf(&args[1..]),
         "naehte" => befehl_naehte(&args[1..]),
@@ -96,6 +98,13 @@ fn hilfe() {
 
   klon3d umriss <muster.sm2d> [--svg <datei.svg>]
       Nahtlinie je Teil: Laenge und Huelle, auf Wunsch als SVG
+
+  klon3d innenpfade <muster.sm2d> [--alle]
+      Innenpfade (Klebezonen, Verzierungen, auszuschneidende Loecher) je
+      Teil: Name, geschnitten oder nur gezeichnet, offen oder geschlossen,
+      Knotenzahl, Laenge in mm und bei geschlossenem Pfad die Flaeche in mm²;
+      --alle zeigt auch Pfade, die kein Teil traegt; Rueckgabe 1, wenn ein
+      Pfad nicht aufloesbar ist
 
   klon3d dxf    <muster.sm2d> <aus.dxf> [--teile <muster,...>]
       AAMA-DXF fuer CLO (Import ohne \"Swap Cutting Line and Sewing Line\"):

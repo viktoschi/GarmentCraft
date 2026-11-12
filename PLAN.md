@@ -293,6 +293,7 @@ new modelling, and CLO's own field set has no columns for the arcs either.
 | **Seam assignment** | seam list `<pattern>.naehte` next to the pattern: sides made of whole boundary edges, 1:1 up to M:N; `klon3d naehte` checks lengths, notches, coverage (`naehte.rs`) | **done** (finding 32); **seam suggestion** `klon3d naehte --vorschlag` (finding 101): Bluse3, Bluse1, bustier and skirt edge for edge like the hand-written list, direction and mirroring from the seam graph; slits stay open off the point names (`KN…`, `…Schlitz`), the waistband keeps its marks in one piece. **Pleats are not recognised** and that is measured, not pending (#141): at bolero v37 a pleat is built as a `cutSpline`, so its middle node kinks by 0.26°–7.15° instead of an edge's 25°, lies on a straight line to 0.15–2.46 mm like a cuff mark (0.00) or an armhole notch (0.26), and repeats in pairs like `MM`; every threshold that finds all 26 pleats brings 2–6 marks with it, so the sleeve stays one 61.80 cm chain and the bolero keeps 5 suggested seams against 182 edges of the hand list (module doc of `vorschlag.rs`) |
 | **Triangulation** | seam line → triangle mesh per piece, approx. 10 mm edge length: boundary split by curvature, ear clipping, Lawson, Ruppert with a minimum angle of 25°, smoothing; exact on an integer grid (`klon3d-mesh`) | **done** (finding 33) |
 | **Subdivision** | subdivide both seam partners equally by **length fraction** as in CLO (§4 of the specification), point nodes of both sides merged up to 2 mm; result: point pairs per sub-seam; `klon3d netz` | **done** (finding 33) |
+| **Internal paths** | `<path>` in a block's `modeling` plus a piece's `<iPaths>`: lines drawn on the piece, not part of its seam line — glue zones, decoration, an opening to cut out (`cut="true"`) | **readable** (`innenpfad.rs`, #143): name, `cut`, open/closed, node count, drawn length, area for a closed path; `klon3d innenpfade`. Data only, nothing is cut yet |
 | Seams | support springs between the partners, 6 mm overlap seam in the middle | flush seam with bending across the seam **done** (finding 34); the overlap seam comes with the glue zones |
 | Reduction | scale rest lengths: torso 5.5%, sleeves 1–2%, cuff 5% | **done** (finding 34): rest length × (1 − r), mass of the cut piece × (1 − r)²; if the reduction is already in the pattern (Bluse3), r = 0 |
 | **Glue zones** | areas that bond two layers firmly: laminate (the whole area of a piece), reinforcement and appliqué (internal shape), overlap seam as a glued strip. Model: CLO's *Gluing* (Glue Fill by outline, Glue Brush painted freely) | **done** as a bond that holds the offset vector (`klebung.rs`, task #11): no sliding, load carried across, `klebt <Teil>` in the placement file; **done** also the bending of the bonded pair (`Stoffpaar::biegefaktor`, task #13): a zone over the whole face bends like the laminate of the same thickness; not against the body ("Tack on Avatar") |
@@ -354,9 +355,17 @@ edge is 0.807 × the particle distance — klon3d's 10 mm corresponds to a
 particle distance of about 12, not 10. The constants are a calibration to
 Style3D's solver; the form of the rule carries over, the numbers do not.
 
+**Internal paths** are readable (#143): `kanten.rs`-style resolution of
+`<path>` + `<iPaths>` in `innenpfad.rs` gives name, `cut`, open/closed, node
+count, drawn length and - for a closed path - the enclosed area, in
+millimetres; `klon3d innenpfade` prints them. Closed means the resolved ends
+meet within the on-curve tolerance, not "the same node id": the head opening of
+`hexenhut_v7` ends on a different node than it starts. The paths are data only;
+they are not cut into the mesh yet.
+
 **Still missing:** seam springs on the point pairs, partial stretches of an edge
-(CLO's Free Sewing), internal shapes (holes, internal lines) and
-darts as seam sides, an automatic seam list as a suggestion.
+(CLO's Free Sewing), cutting an internal shape out of the mesh (the paths are
+read, not cut), darts as seam sides, an automatic seam list as a suggestion.
 
 **How the reference computes the seam allowance** (findings 132, 133) - read;
 the arithmetic is rebuilt in `crates/klon3d-pattern/src/nahtzugabe.rs` (#70),
