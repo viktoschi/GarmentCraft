@@ -29,6 +29,33 @@
 //!    ist eine Annahme über die Punktnamen, keine Messung; heißt ein Schlitz
 //!    anders, wird er weiter zugenäht.
 //!
+//! **Grenze: Falten.** Ein Pleat (Bolero: sieben Kugel- und sechs Saumfalten je
+//! Ärmel) steht im Muster wie eine Kerbe: drei Punktknoten `A M B` auf dem
+//! Rand, die gefaltete Naht `A–M` auf `B–M`. Er ist **nicht** geometrisch zu
+//! erkennen, gemessen am Bolero v37 über alle sechs Prüfmuster und 26
+//! Sollfalten an beiden Ärmeln (12.11.2026):
+//!
+//! * **Keine Ecke:** der Knick an `M` liegt bei 0,26°–7,15° (das Muster baut
+//!   ihn als `cutSpline` auf einer Kurve), eine Ecke verlangt 25°. Der Test
+//!   findet die Falte also nicht — er findet an dieser Stelle auch nichts
+//!   Falsches, weil die Falten in der einen 61,80-cm-Kette des Ärmels
+//!   verschwinden.
+//! * **Keine Kollinearität:** `A`, `M`, `B` liegen auf 0,15–2,46 mm einer
+//!   Geraden — aber die Manschettenmarke `MM` (0,00 mm), die Armlochkerbe
+//!   `FSM` (0,26 mm) und die Kerben `KF7B`/`KF1Ar` (2,94/2,96 mm) liegen
+//!   genauso. Bei 3 mm Toleranz sind alle 26 Falten getroffen und 6 Fremde
+//!   dazu; bei 0,3 mm 14 Falten und 4 Fremde.
+//! * **Keine Periode:** „zwei kurze, gleich lange Stücke zwischen zwei
+//!   längeren" trifft 22 der 26 Falten und die Marke `MM` (20,03/20,03 mm
+//!   zwischen 40,54/40,33) — `KF1M` und `KF7M` fallen heraus, weil ihre
+//!   Nachbarn selbst Faltenstücke sind. Mit einer Zone aus mindestens drei
+//!   Kandidaten sind es 26 Falten und 2 Fremde (`KF7B`, `KF1Ar`).
+//!
+//! Deshalb bleibt der Bolero beim Vorschlag aus dem Muster allein bei 5
+//! Nähten; Falten brauchen eine Angabe im Muster (Name oder Marke), nicht
+//! eine weitere Schwelle. Die 182 Kanten der Handliste stehen in
+//! `tests/muster/hexen_2026_10_27/bolero_v37.naehte`.
+//!
 //! Die Richtung folgt den Kerben oder gemeinsamen Punkten; passen beide$
 //! Richtungen, die, in der die Enden relativ zur Mitte wie gezeichnet liegen.
 //! Ergebnis ist eine Nahtliste wie von Hand (`klon3d naehte --vorschlag`),
